@@ -53,11 +53,11 @@ function installInto(root, options) {
 
 // --- registry and selection ------------------------------------------------
 
-const TEAM = ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general"]
+const TEAM = ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general", "agent:workers/setup"]
 const MCPS = ["mcp:git", "mcp:fetch", "mcp:context7", "mcp:serena"]
 const EVERYTHING = [...TEAM, ...MCPS]
 
-test("the registry exposes the plugin, the three agents and the MCP servers", () => {
+test("the registry exposes the plugin, the four agents and the MCP servers", () => {
   const components = listComponents(registry)
   assert.deepEqual(components.map((component) => component.key), EVERYTHING)
 
@@ -295,15 +295,81 @@ test("the ceo is a primary agent that denies everything except launching general
   assert.ok(ceo.body.length > 0, "the prompt body must not be empty")
 })
 
-// The manager works only through workers. It has no way to read, edit or run.
-test("the manager is a subagent that may launch workers and keep a to-do list, nothing else", () => {
+// The manager works only through workers. It has no way to read, edit or run;
+// its one extra reach is Code Mode, for exactly the three worktree tools.
+test("the manager may launch workers, keep a to-do list and use only the worktree tools", () => {
   const manager = readAgent("general-manager")
 
   assert.ok(manager.description)
   assert.equal(manager.mode, "subagent")
   assert.deepEqual(manager.rules[0], { action: "*", resource: "*", effect: "deny" })
-  assert.deepEqual(allowed(manager), ["subagent:workers/*", "todowrite:*"])
+  assert.deepEqual(allowed(manager), [
+    "subagent:workers/*",
+    "todowrite:*",
+    "execute:*",
+    "opencode_worktree_list:*",
+    "opencode_worktree_create:*",
+    "opencode_session_move:*",
+  ])
   assert.ok(manager.body.length > 0)
+})
+
+// Checked against OpenCode: with only `execute` allowed the opencode namespace was
+// "Unknown tool"; each opencode_<tool> permission is what makes it visible.
+test("every worktree tool the manager's prompt tells it to call has a permission", () => {
+  const manager = readAgent("general-manager")
+  const called = [...manager.body.matchAll(/tools\.opencode\.(\w+)\(/g)].map((match) => match[1])
+
+  assert.deepEqual([...new Set(called)].sort(), ["session_move", "worktree_create", "worktree_list"])
+  for (const tool of called) {
+    assert.ok(
+      manager.rules.some((rule) => rule.action === `opencode_${tool}` && rule.effect === "allow"),
+      `opencode_${tool} must be allowed`,
+    )
+  }
+})
+
+test("the manager never gets the tool that removes a worktree, so cleanup stays with the user", () => {
+  const manager = readAgent("general-manager")
+  assert.equal(manager.rules.some((rule) => /worktree_remove/.test(rule.action)), false)
+  assert.doesNotMatch(manager.body, /tools\.opencode\.worktree_remove/)
+})
+
+test("the manager's prompt makes the worktree its first action and hands setup to workers/setup", () => {
+  const { body } = readAgent("general-manager")
+  assert.match(body, /## Your first action/)
+  assert.ok(body.indexOf("## Your first action") < body.indexOf("## Working"))
+  assert.match(body, /workers\/setup/)
+  assert.match(body, /work\/<slug>/)
+})
+
+// The setup worker needs a shell, because project setup is commands. What it
+// must not do is reach out: no launching, no pushing, no new remotes, no sudo.
+test("the setup worker may run commands but not push, add remotes, sudo or launch", () => {
+  const setup = readAgent("workers/setup")
+
+  assert.ok(setup.description)
+  assert.equal(setup.mode, "subagent")
+  assert.deepEqual(setup.rules[0], { action: "*", resource: "*", effect: "deny" })
+
+  const actions = new Set(setup.rules.filter((rule) => rule.effect === "allow").map((rule) => rule.action))
+  assert.deepEqual([...actions].sort(), ["edit", "glob", "grep", "read", "shell"])
+
+  const lastIndex = (resource, effect) =>
+    setup.rules.findLastIndex((rule) => rule.action === "shell" && rule.resource === resource && rule.effect === effect)
+  const broadAllow = lastIndex("*", "allow")
+  for (const resource of ["git push *", "git remote *", "sudo *"]) {
+    assert.ok(lastIndex(resource, "deny") > broadAllow, `${resource} must be denied after the broad shell allow`)
+  }
+})
+
+test("the setup worker's prompt covers the guidance file, the branch and never printing secrets", () => {
+  const { body } = readAgent("workers/setup")
+  assert.match(body, /\.opencode\/worktree-setup\.md/)
+  assert.match(body, /git switch -c/)
+  assert.match(body, /detached HEAD/)
+  assert.match(body, /Never put a secret value/)
+  assert.match(body, /at most twice/)
 })
 
 // The worker is a leaf: it cannot run commands, ask, or launch anything.

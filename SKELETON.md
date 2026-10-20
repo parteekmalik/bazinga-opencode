@@ -4,8 +4,8 @@
 `v2.1.0` (OpenCode updated mid-session), 2026-10-20.
 **Relation to `PLAN.md`:** this is phase 0 of §10, expanded into the frame the
 build sits in. `PLAN.md` is the build; this is what exists today.
-**Scope:** the load path, the component installer, and three agents (`ceo`,
-`general-manager`, `workers/general`). The skill and command slots are declared but
+**Scope:** the load path, the component installer, and four agents (`ceo`,
+`general-manager`, `workers/general`, `workers/setup`). The skill and command slots are declared but
 empty.
 
 ---
@@ -45,7 +45,8 @@ bazinga-opencode/
 │   ├── agents/ceo.md            # tool-less coordinator; denies all but launching general-manager
 │   ├── agents/general-manager.md  # one task -> worker jobs; launches workers/* only
 │   ├── agents/workers/            # the folder is part of the agent id: workers/<name>
-│   │   └── general.md             # general leaf: read, search, edit; no shell, no launching
+│   │   ├── general.md             # general leaf: read, search, edit; no shell, no launching
+│   │   └── setup.md               # prepares a manager's worktree from the project's guidance
 │   ├── skills/.gitkeep          # empty — phase 2 sources land here
 │   └── commands/.gitkeep        # empty — phase 2 sources land here
 ├── bin/bazinga.js               # installer CLI
@@ -141,7 +142,7 @@ anywhere.
   },
   "profiles": {
     "plugin": ["plugin:core"],
-    "full": ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general"],
+    "full": ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general", "agent:workers/setup"],
     "mcp": ["mcp:git", "mcp:fetch", "mcp:context7", "mcp:serena"]
   }
 }
@@ -273,6 +274,13 @@ Observed on `opencode v2.1.0`, the agent team:
 | A nested path becomes part of the agent id | `agents/workers/alpha.md` was launched as `workers/alpha`; the installer's `agents/workers/general.md` ran as `workers/general` |
 | A permission resource `workers/*` matches across the slash and nothing outside it | a test agent allowed `workers/*` launched `workers/alpha` and was refused `other` ("Permission denied: subagent") |
 | CEO → `general-manager` → `workers/general` completes a real task, after both renames | the manager reached the worker through `workers/*`; the file was created; three sessions' agents were `ceo`, `general-manager`, `workers/general` |
+| `worktree_list`, `worktree_create`, `session_move` work for a subagent that has `execute` plus `opencode_worktree_list`, `opencode_worktree_create`, `opencode_session_move` allowed | with only `execute` the manager got \"Unknown tool 'opencode.worktree_list'\"; with the three permissions a probe agent listed, created and moved |
+| A worker launched after `session_move` starts in the worktree | its file landed in `wt-trees/probe2/`, not the main checkout; the session list still showed the original directory |
+| After the move the agents are loaded from the worktree | an uncommitted agent file gave `Agent not found` once the session moved; committed, it worked |
+| A new worktree is on a detached HEAD, and `commands.start` runs on creation | `git worktree list` showed `(detached HEAD)`; a start command set by PATCH wrote its file in the new worktree |
+| CEO → manager → `workers/setup` → `workers/general` works with a guidance file | `.env` and `db-<name>.json` made in the worktree as the guide said, `hello.txt` there, main checkout untouched, branch `work/<name>` |
+| Without a guidance file it falls back to a plain worktree on a branch | three runs: a worktree and branch each, the file in it, main untouched |
+| Manager follows the worktree steps | 1 of about 4 runs with the steps in the middle of the prompt; 3 of 3 once moved to a first-action section. An instruction, not an enforcement |
 | CEO → `general-manager` → `worker` completes a real task (before the folder move) | installed all three with the installer (`--project --settings`), asked the CEO for a one-line file; the file was created, the CEO called only `subagent`, the manager only `subagent`, the worker `glob`, `read`, `patch` |
 | The to-do tool is off by default | asked to list its tools, the default agent named `glob, grep, patch, question, read, shell, skill, subagent, webfetch, websearch, execute`; a test agent with `todowrite` allowed said it had no todo tool |
 | `experimental.todo: true` turns it on, as `todowrite` | with the flag, an agent allowed `todowrite` wrote its list and one denied it reported no tool. Source: the v2.1.0 changelog and PR #56947 (research supplied by the user). The schema served at `opencode.ai/config.json` does not list the key yet, so it lags the binary |
@@ -318,7 +326,7 @@ node bin/bazinga.js uninstall --target /tmp/bazinga-install-test
 node --test tests/
 ```
 
-82 tests, no dependency beyond Node itself.
+87 tests, no dependency beyond Node itself.
 
 ### The load proof
 
@@ -338,7 +346,7 @@ Each line is `<ISO timestamp> pid=<server pid> loaded|unloaded`.
 4. Prove `setup` runs with a file marker. Done.
 5. Build the registry and installer. Done.
 6. Verify install, refusal without `--force`, and uninstall. Done.
-7. Add installer tests. Done, 82 passing.
+7. Add installer tests. Done, 87 passing.
 8. Add the `ceo` agent. Done: `.opencode/agents/ceo.md`, registered as `agent:ceo`.
 9. Add the manager (first `01-manager`, renamed `general-manager`) and the general
    worker (first `worker`, moved into `workers/` as `workers/general`), and run the

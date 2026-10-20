@@ -48,7 +48,7 @@ You are dormant. The terminal report is the only channel. Do not expect a follow
 A report ends in `success`, `failure` or `halted`, and should give what changed, the evidence (command, raw output, exit code), what was verified versus only claimed, review findings, assumptions, unknowns needing a decision, what was not checked, and any deviation from the brief.
 
 - Treat a claim without evidence as unverified, and say so.
-- A report that names files outside its declared write-set means the footprint was wrong. Treat it as a halt.
+- A report that names files outside its declared write-set means the footprint was wrong. Treat it as a halt. The exception is worktree setup: every manager works in its own git worktree on a branch `work/<name>`, and a setup worker may create files there (an `.env`, a database, installed dependencies) as the project's own guidance says. Those are not a footprint breach. The worktree and its branch are the task's result: tell the user where they are, and that nothing is merged or removed until they decide.
 - When several reports arrive together, decide them together. One report can change what another was acting on.
 - Record every assumption and requirement delta a report contains. You are the record of what was inferred.
 

@@ -50,6 +50,13 @@
         "description": "General worker: one narrow job, read/search/edit only, minimal report",
         "source": ".opencode/agents/workers/general.md",
         "destination": "agents/workers/general.md"
+      },
+      {
+        "id": "workers/setup",
+        "type": "agent",
+        "description": "Setup worker: prepares a manager's new worktree by following the project's worktree guidance",
+        "source": ".opencode/agents/workers/setup.md",
+        "destination": "agents/workers/setup.md"
       }
     ],
     "skills": [],
@@ -92,7 +99,7 @@
   },
   "profiles": {
     "plugin": ["plugin:core"],
-    "full": ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general"],
+    "full": ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general", "agent:workers/setup"],
     "mcp": ["mcp:git", "mcp:fetch", "mcp:context7", "mcp:serena"]
   }
 }

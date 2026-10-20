@@ -12,15 +12,16 @@ components into an OpenCode folder and records exactly what it wrote.
 | `skills` | `skill:<id>` | `skills/<id>/` |
 | `commands` | `command:<id>` | `commands/` |
 
-Today the registry holds `plugin:core` and three agents: `agent:ceo`,
-`agent:general-manager` and `agent:workers/general`. The skill and command slots
+Today the registry holds `plugin:core` and four agents: `agent:ceo`,
+`agent:general-manager`, `agent:workers/general` and `agent:workers/setup`. The skill and command slots
 are empty in this skeleton; the installer already handles them.
 
 | Agent | Role | What it may do |
 | --- | --- | --- |
 | `ceo` | Primary. Plans, arbitrates, the only one that talks to you | Launch `general-manager` only |
-| `general-manager` | Subagent. Owns one task, splits it into worker jobs | Launch any agent in `workers/`; keep its plan in OpenCode's to-do list (`todowrite`) |
+| `general-manager` | Subagent. Owns one task in its own git worktree, splits it into worker jobs | Launch any agent in `workers/`; keep its plan in the to-do list (`todowrite`); create a worktree and move into it. See [WORKTREES.md](WORKTREES.md) |
 | `workers/general` | Subagent. One narrow job, minimal report | Read, search and edit files. No commands, no launching, no secret files |
+| `workers/setup` | Subagent. Prepares a manager's worktree from the project's guidance | Read, search, edit (`.env` too) and run commands. No launching, no push, no remotes, no `sudo` |
 
 **Workers live in their own folder.** In OpenCode a nested path becomes part of the
 agent id, so `agents/workers/general.md` is the agent `workers/general`. The manager
@@ -190,7 +191,7 @@ already satisfy it, the interactive installer shows the current value and asks.
 Selecting both sets it once, to 3. On the command line:
 
 ```bash
-node bin/bazinga.js install --project --only agent:ceo,agent:general-manager,agent:workers/general --settings
+node bin/bazinga.js install --project --only agent:ceo,agent:general-manager,agent:workers/general,agent:workers/setup --settings
 ```
 
 - The `opencode.json` it changes is the one for the chosen destination (the
