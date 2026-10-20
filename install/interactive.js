@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import * as p from "@clack/prompts"
 
-import { applyPlan, buildPlan, resolveDestination, uninstall } from "./apply.js"
+import { applyPlan, buildPlan, pendingSettings, resolveDestination, uninstall } from "./apply.js"
 import { readReceipt, receiptPath, removeReceipt, writeReceipt } from "./receipt.js"
 import { listComponents, resolveSelection } from "./resolve.js"
 
@@ -114,12 +114,41 @@ async function askConfig(components, flags) {
   )
 }
 
-function describePlan(plan, config) {
+// Settings a selected component needs that opencode.json does not yet satisfy.
+// Asked separately from registering the plugin: they are different changes to
+// the same file, so each gets its own yes or no.
+async function askSettings(plan, flags, config) {
+  if (flags.configExplicit && !config) return false // --no-config
+
+  const pending = pendingSettings(plan)
+  if (pending.length === 0) return false
+  if (flags.settings) return true
+
+  const lines = pending.map(
+    (setting) =>
+      `${setting.key} → at least ${setting.min}  (now ${setting.current ?? "unset"}) in ${setting.configPath}\n  ${setting.reason}`,
+  )
+  p.note(lines.join("\n\n"), "Settings these components need")
+
+  return answer(
+    await p.confirm({
+      message: "Update them? (backed up first, never lowered)",
+      initialValue: true,
+    }),
+  )
+}
+
+function describePlan(plan, config, settings) {
   const lines = []
   for (const item of plan) {
     lines.push(`+ ${item.installed}`)
     if (item.entry && config) {
       lines.push(`~ ${item.configPath} → ${item.component.register}: ${item.entry}`)
+    }
+  }
+  if (config && settings) {
+    for (const setting of pendingSettings(plan)) {
+      lines.push(`~ ${setting.configPath} → ${setting.key}: ${setting.min}`)
     }
   }
   return lines.join("\n")
@@ -133,8 +162,9 @@ export async function interactiveInstall({ repoRoot, registry, flags }) {
     const components = await askComponents(registry, flags)
     const config = await askConfig(components, flags)
     const plan = buildPlan(repoRoot, components, destination)
+    const settings = await askSettings(plan, flags, config)
 
-    p.note(describePlan(plan, config), `Plan — ${destination.mode}`)
+    p.note(describePlan(plan, config, settings), `Plan — ${destination.mode}`)
 
     if (flags.dryRun) {
       p.outro("Dry run — nothing written")
@@ -159,7 +189,7 @@ export async function interactiveInstall({ repoRoot, registry, flags }) {
 
     const spinner = p.spinner()
     spinner.start("Installing")
-    const { paths, configs } = applyPlan(plan, { force, config })
+    const { paths, configs, settings: applied } = applyPlan(plan, { force, config, settings })
     writeReceipt(destination.destination, {
       version: 1,
       installedAt: new Date().toISOString(),
@@ -167,6 +197,7 @@ export async function interactiveInstall({ repoRoot, registry, flags }) {
       destination: destination.destination,
       paths,
       configs,
+      settings: applied,
     })
     spinner.stop(`Installed ${components.length} component(s)`)
 
@@ -191,6 +222,9 @@ export async function interactiveUninstall({ flags }) {
     const lines = [
       ...(receipt.paths ?? []).map((path) => `- ${path}`),
       ...(receipt.configs ?? []).map((c) => `~ ${c.path} → remove ${c.key}: ${c.value}`),
+      ...(receipt.settings ?? []).map(
+        (s) => `~ ${s.path} → ${s.key}: ${s.previous === null ? "remove" : `back to ${s.previous}`}`,
+      ),
     ]
     p.note(lines.join("\n") || "(nothing recorded)", "Will remove")
 

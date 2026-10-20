@@ -7,9 +7,13 @@ OpenCode 2 only.
 
 ## Status
 
-**Skeleton.** The installer and the load-proof plugin work. The agent, skill and
-command slots are empty. See [SKELETON.md](SKELETON.md) for the scaffold and
-[PLAN.md](PLAN.md) for the build.
+**Skeleton plus a first team.** The installer and the load-proof plugin work,
+and three agents ship: `ceo` (tool-less coordinator), `01-manager` (splits one
+task into worker jobs) and `worker` (one narrow job, read/search/edit only).
+The skill and command slots are empty. Install any agent alone, for example
+`--only agent:worker`. The CEO needs `experimental.subagent_depth` raised so it
+can launch managers that launch workers; the installer offers to set it. See
+[SKELETON.md](SKELETON.md) for the scaffold and [PLAN.md](PLAN.md) for the build.
 
 ## Install
 
@@ -70,7 +74,8 @@ default and records the rejected value in the log.
 node --test tests/
 ```
 
-26 tests covering selection, destinations, install, config merge and uninstall.
+53 tests covering selection, destinations, install, config merge, uninstall, the
+three agents' permissions and the config settings they need.
 No test dependency: Node's built-in runner.
 
 ## License

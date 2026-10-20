@@ -10,12 +10,48 @@
         "register": "plugins"
       }
     ],
-    "agents": [],
+    "agents": [
+      {
+        "id": "ceo",
+        "type": "agent",
+        "description": "Tool-less coordinator: briefs, arbitration, the user channel",
+        "source": ".opencode/agents/ceo.md",
+        "destination": "agents/ceo.md",
+        "settings": [
+          {
+            "key": "experimental.subagent_depth",
+            "min": 3,
+            "reason": "The CEO launches managers and managers launch workers; OpenCode allows one level of subagents by default"
+          }
+        ]
+      },
+      {
+        "id": "01-manager",
+        "type": "agent",
+        "description": "Owns one task: splits it into worker jobs, keeps a to-do list, reports to the CEO",
+        "source": ".opencode/agents/01-manager.md",
+        "destination": "agents/01-manager.md",
+        "settings": [
+          {
+            "key": "experimental.subagent_depth",
+            "min": 2,
+            "reason": "A manager launches workers; OpenCode allows one level of subagents by default"
+          }
+        ]
+      },
+      {
+        "id": "worker",
+        "type": "agent",
+        "description": "General worker: one narrow job, read/search/edit only, minimal report",
+        "source": ".opencode/agents/worker.md",
+        "destination": "agents/worker.md"
+      }
+    ],
     "skills": [],
     "commands": []
   },
   "profiles": {
     "plugin": ["plugin:core"],
-    "full": ["plugin:core"]
+    "full": ["plugin:core", "agent:ceo", "agent:01-manager", "agent:worker"]
   }
 }

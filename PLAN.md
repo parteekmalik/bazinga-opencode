@@ -452,7 +452,7 @@ bazinga-opencode/
 ├── LICENSE                      # MIT
 ├── registry.json                # components and profiles the installer reads
 ├── package.json                 # type: module, exports → plugin, bin → installer
-├── opencode.json                # schema only; the repo is its own project
+├── opencode.json                # schema + experimental.subagent_depth; the repo is its own project
 ├── bin/
 │   └── bazinga.js               # installer CLI: list, install, uninstall
 ├── install/

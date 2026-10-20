@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import {
   applyPlan,
   buildPlan,
+  pendingSettings,
   resolveDestination,
   uninstall as removeInstalled,
 } from "../install/apply.js"
@@ -42,6 +43,9 @@ Other
   --dry-run           print the plan, write nothing
   --force             replace an existing installation
   --no-config         copy files but never touch opencode.json
+  --settings          also raise config values the components need (for example
+                      experimental.subagent_depth). Never lowers a value; backed up
+                      first. Without it, install only prints what is missing
 
 Examples
   node bin/bazinga.js list
@@ -59,6 +63,7 @@ function parseArgs(argv) {
     global: false,
     only: [],
     project: false,
+    settings: false,
     target: undefined,
     profile: undefined,
   }
@@ -72,6 +77,7 @@ function parseArgs(argv) {
     else if (arg === "--force") flags.force = true
     else if (arg === "--global") flags.global = true
     else if (arg === "--project") flags.project = true
+    else if (arg === "--settings") flags.settings = true
     else if (arg === "--no-config") {
       flags.config = false
       flags.configExplicit = true
@@ -138,6 +144,16 @@ function list() {
   }
 }
 
+// For reporting only: a config value we cannot read is a note, not a failure.
+function unmetSettings(plan) {
+  try {
+    return pendingSettings(plan)
+  } catch (error) {
+    console.log(`note: ${error instanceof Error ? error.message : String(error)}`)
+    return []
+  }
+}
+
 function install(flags) {
   const registry = loadRegistry(repoRoot)
   const components = resolveSelection(registry, flags)
@@ -155,10 +171,20 @@ function install(flags) {
         console.log(`    config  ${item.configPath} → ${item.component.register}: ${item.entry}`)
       }
     }
+    for (const setting of unmetSettings(plan)) {
+      const state = flags.settings && flags.config ? "would set" : "needed, not applied without --settings"
+      console.log(
+        `\n  setting ${setting.configPath} → ${setting.key} >= ${setting.min} (now ${setting.current ?? "unset"}) — ${state}`,
+      )
+    }
     return
   }
 
-  const { paths, configs } = applyPlan(plan, { force: flags.force, config: flags.config })
+  const { paths, configs, settings } = applyPlan(plan, {
+    force: flags.force,
+    config: flags.config,
+    settings: flags.settings,
+  })
   writeReceipt(destination.destination, {
     version: 1,
     installedAt: new Date().toISOString(),
@@ -166,12 +192,25 @@ function install(flags) {
     destination: destination.destination,
     paths,
     configs,
+    settings,
   })
 
   console.log(`Installed ${components.length} component(s) into ${destination.destination}`)
   for (const path of paths) console.log(`  + ${path}`)
   for (const config of configs) console.log(`  ~ ${config.path} → ${config.key}: ${config.value}`)
+  for (const setting of settings) {
+    console.log(`  ~ ${setting.path} → ${setting.key}: ${setting.value} (was ${setting.previous ?? "unset"})`)
+  }
   console.log(`  receipt ${join(destination.destination, ".bazinga-install.json")}`)
+
+  // Still unmet: say so, never change it silently.
+  for (const setting of unmetSettings(plan)) {
+    const fix = flags.config ? "Rerun with --settings, or set it yourself." : "Set it yourself."
+    console.log(
+      `note: ${setting.key} should be at least ${setting.min} in ${setting.configPath} (now ${setting.current ?? "unset"}). ` +
+        `${setting.reason}. ${fix}`,
+    )
+  }
 }
 
 function uninstall(flags) {
@@ -183,6 +222,10 @@ function uninstall(flags) {
     for (const path of receipt.paths ?? []) console.log(`  - ${path}`)
     for (const config of receipt.configs ?? []) {
       console.log(`  ~ ${config.path} → remove ${config.key}: ${config.value}`)
+    }
+    for (const setting of receipt.settings ?? []) {
+      const action = setting.previous === null ? "remove" : `back to ${setting.previous}`
+      console.log(`  ~ ${setting.path} → ${setting.key}: ${action} (only if still ${setting.value})`)
     }
     return
   }
