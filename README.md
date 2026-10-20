@@ -73,3 +73,7 @@ node --test tests/
 26 tests covering selection, destinations, install, config merge and uninstall.
 No test dependency: Node's built-in runner.
 
+## License
+
+[MIT](LICENSE) © 2026 Parteek malik
+

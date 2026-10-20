@@ -56,7 +56,7 @@ repository.
 ### Plugin only
 
 ```sh
-opencode plugin add github:<owner>/bazinga-opencode
+opencode plugin add github:parteekmalik/bazinga-opencode
 ```
 
 ```
@@ -72,7 +72,7 @@ components. No `curl | bash`, no npm publish, no manual file copying.
 Pin it for stability, since a full commit hash stays pinned on update:
 
 ```sh
-opencode plugin add github:<owner>/bazinga-opencode#<sha>
+opencode plugin add github:parteekmalik/bazinga-opencode#<sha>
 opencode plugin update     # unpinned npm/Git is checked; exact versions and full SHAs are skipped
 ```
 
@@ -109,7 +109,7 @@ The installer is the primary route: `node bin/bazinga.js install --only agent:ce
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["github:<owner>/bazinga-opencode"]
+  "plugins": ["github:parteekmalik/bazinga-opencode"]
 }
 ```
 
