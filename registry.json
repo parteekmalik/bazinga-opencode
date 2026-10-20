@@ -36,6 +36,11 @@
             "key": "experimental.subagent_depth",
             "min": 2,
             "reason": "A manager launches workers; OpenCode allows one level of subagents by default"
+          },
+          {
+            "key": "experimental.todo",
+            "value": true,
+            "reason": "A manager keeps its plan in the to-do list (todowrite); OpenCode 2.1 ships that tool off by default"
           }
         ]
       },

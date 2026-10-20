@@ -138,7 +138,9 @@ OpenCode folder. `register` names the config array the installed path is added
 to — only the plugin needs one. `settings` lists scalar config values a component
 needs (`agent:ceo` declares `experimental.subagent_depth`, minimum 3, with the
 reason). They are applied only on request: a yes in the TUI or `--settings`.
-The installer raises a number to the minimum, never lowers it, and records the
+A setting is either `{ "min": n }` (a number, raised to at least n) or
+`{ "value": true }` (a flag, set to that value; `agent:01-manager` declares
+`experimental.todo`). The installer never lowers a number, and records the
 previous value in the receipt so uninstall can put it back. When several
 selected components ask for the same key, it is written once, at the highest
 minimum (the CEO's 3 wins over the manager's 2).
@@ -247,7 +249,9 @@ Observed on `opencode v2.1.0`, the agent team:
 | OpenCode records the subagent tree itself | each session had `parentID`, tokens and cost, no plugin involved |
 | A subagent call returns the child's final response and a `sessionID` | tools docs, the tool description, and the chain above |
 | CEO → `01-manager` → `worker` completes a real task | installed all three with the installer (`--project --settings`), asked the CEO for a one-line file; the file was created, the CEO called only `subagent`, the manager only `subagent`, the worker `glob`, `read`, `patch` |
-| The default agent has no to-do tool | asked to list its tools: `glob, grep, patch, question, read, shell, skill, subagent, webfetch, websearch, execute`. A test agent with `todowrite` allowed answered that it had no todo tool. The manager keeps the `todowrite` rule for when one appears, and its prompt tells it not to pretend |
+| The to-do tool is off by default | asked to list its tools, the default agent named `glob, grep, patch, question, read, shell, skill, subagent, webfetch, websearch, execute`; a test agent with `todowrite` allowed said it had no todo tool |
+| `experimental.todo: true` turns it on, as `todowrite` | with the flag, an agent allowed `todowrite` wrote its list and one denied it reported no tool. Source: the v2.1.0 changelog and PR #56947 (research supplied by the user). The schema served at `opencode.ai/config.json` does not list the key yet, so it lags the binary |
+| The manager uses `todowrite` when told to plan first, unconditionally | one team run with soft wording: zero calls. After making it a required first step: three calls, plus a separate review worker. One run on one model, not a guarantee |
 | Agent permission rules come after the global ones and the last match wins | the CEO's `* deny` overrode the global allows; so the worker re-denies `.env*` after its broad `read`/`edit` allow |
 
 ## 6. Probes — all resolved
@@ -289,7 +293,7 @@ node bin/bazinga.js uninstall --target /tmp/bazinga-install-test
 node --test tests/
 ```
 
-53 tests, no dependency beyond Node itself.
+57 tests, no dependency beyond Node itself.
 
 ### The load proof
 
@@ -309,7 +313,7 @@ Each line is `<ISO timestamp> pid=<server pid> loaded|unloaded`.
 4. Prove `setup` runs with a file marker. Done.
 5. Build the registry and installer. Done.
 6. Verify install, refusal without `--force`, and uninstall. Done.
-7. Add installer tests. Done, 53 passing.
+7. Add installer tests. Done, 57 passing.
 8. Add the `ceo` agent. Done: `.opencode/agents/ceo.md`, registered as `agent:ceo`.
 9. Add `01-manager` and `worker`, and run the whole chain end to end. Done.
 10. `git init`, commits and push to `github.com/parteekmalik/bazinga-opencode`.

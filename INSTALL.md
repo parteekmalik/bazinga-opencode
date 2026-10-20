@@ -19,7 +19,7 @@ this skeleton; the installer already handles them.
 | Agent | Role | What it may do |
 | --- | --- | --- |
 | `ceo` | Primary. Plans, arbitrates, the only one that talks to you | Launch `01-manager` only |
-| `01-manager` | Subagent. Owns one task, splits it into worker jobs | Launch `worker`; a to-do list tool if OpenCode offers one |
+| `01-manager` | Subagent. Owns one task, splits it into worker jobs | Launch `worker`; keep its plan in OpenCode's to-do list (`todowrite`) |
 | `worker` | Subagent. One narrow job, minimal report | Read, search and edit files. No commands, no launching, no secret files |
 
 Each agent is a single Markdown file, and installing one on its own copies
@@ -91,7 +91,9 @@ Installing `agent:*`, `skill:*` or `command:*` does not register anything in
 `opencode.json`. A component can still declare a **setting** it needs, such as
 `agent:ceo` needing `experimental.subagent_depth` (next section). The installer
 changes a setting only when you say so: a yes in the interactive prompt, or
-`--settings` on the command line. It only ever raises a number, never lowers it.
+`--settings` on the command line. It never lowers a number. A flag is set to the
+value the component needs; if you had switched it off, the prompt shows that and
+uninstall puts your value back.
 
 Passing `--no-config` stops both the plugin registration and any settings change.
 
@@ -134,7 +136,26 @@ To set it yourself instead, add this to the `opencode.json` that applies:
 { "experimental": { "subagent_depth": 3 } }
 ```
 
-This repository's own `opencode.json` already sets it.
+This repository's own `opencode.json` sets it.
+
+## To-do tool
+
+The manager keeps its plan in OpenCode's to-do list, the `todowrite` tool. In
+OpenCode 2.1 that tool is experimental and off by default, so without the flag an
+agent allowed `todowrite` simply has no such tool. Turn it on with:
+
+```json
+{ "experimental": { "todo": true } }
+```
+
+`agent:01-manager` declares this setting, so the installer asks about it the same
+way it asks about the depth: a yes in the interactive prompt, or `--settings`.
+The flag only makes the tool exist. Each agent's own `permissions` still decide
+who may call it, and here only the manager is allowed: the CEO and the worker deny
+everything not listed.
+
+If the flag is off, the manager's prompt tells it to write the plan out in plain
+text instead and not to pretend it used a tool.
 
 ## Plugin only, without the installer
 

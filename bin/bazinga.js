@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import {
   applyPlan,
   buildPlan,
+  describeTarget,
   pendingSettings,
   resolveDestination,
   uninstall as removeInstalled,
@@ -174,7 +175,7 @@ function install(flags) {
     for (const setting of unmetSettings(plan)) {
       const state = flags.settings && flags.config ? "would set" : "needed, not applied without --settings"
       console.log(
-        `\n  setting ${setting.configPath} → ${setting.key} >= ${setting.min} (now ${setting.current ?? "unset"}) — ${state}`,
+        `\n  setting ${setting.configPath} → ${setting.key}: ${describeTarget(setting)} (now ${setting.current ?? "unset"}) — ${state}`,
       )
     }
     return
@@ -207,7 +208,7 @@ function install(flags) {
   for (const setting of unmetSettings(plan)) {
     const fix = flags.config ? "Rerun with --settings, or set it yourself." : "Set it yourself."
     console.log(
-      `note: ${setting.key} should be at least ${setting.min} in ${setting.configPath} (now ${setting.current ?? "unset"}). ` +
+      `note: ${setting.key} should be ${describeTarget(setting)} in ${setting.configPath} (now ${setting.current ?? "unset"}). ` +
         `${setting.reason}. ${fix}`,
     )
   }

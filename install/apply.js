@@ -60,6 +60,18 @@ export function buildPlan(repoRoot, components, destination) {
   })
 }
 
+// A setting a component needs is one of two kinds:
+//   { key, min: 3 }      a number, raised to at least 3 and never lowered
+//   { key, value: true } a flag, set to that value
+export const targetOf = (setting) => (typeof setting.min === "number" ? setting.min : setting.value)
+
+export function describeTarget(setting) {
+  return typeof setting.min === "number" ? `at least ${setting.min}` : String(setting.value)
+}
+
+const isMet = (target, current) =>
+  typeof target === "number" ? typeof current === "number" && current >= target : current === target
+
 // The settings in a plan that the current config does not already satisfy, one
 // per key (the highest minimum wins), with the value found today.
 export function pendingSettings(plan) {
@@ -67,16 +79,20 @@ export function pendingSettings(plan) {
 
   for (const item of plan) {
     for (const setting of item.settings ?? []) {
-      const known = byKey.get(`${setting.configPath}\0${setting.key}`)
-      if (!known || setting.min > known.min) {
-        byKey.set(`${setting.configPath}\0${setting.key}`, setting)
+      const id = `${setting.configPath}\0${setting.key}`
+      const known = byKey.get(id)
+      if (!known || (typeof setting.min === "number" && setting.min > targetOf(known))) {
+        byKey.set(id, setting)
       }
     }
   }
 
   return [...byKey.values()]
-    .map((setting) => ({ ...setting, current: readSetting(setting.configPath, setting.key) }))
-    .filter((setting) => setting.current === undefined || setting.current < setting.min)
+    .map((setting) => ({
+      ...setting,
+      current: readSetting(setting.configPath, setting.key, typeof targetOf(setting)),
+    }))
+    .filter((setting) => !isMet(targetOf(setting), setting.current))
 }
 
 function relativeEntry(configRoot, installed) {
@@ -124,12 +140,12 @@ export function applyPlan(plan, { force = false, config = true, settings = false
   }
 
   for (const setting of toApply) {
-    const result = ensureSetting(setting.configPath, setting.key, setting.min)
+    const result = ensureSetting(setting.configPath, setting.key, targetOf(setting))
     if (result.changed) {
       applied.push({
         path: setting.configPath,
         key: setting.key,
-        value: setting.min,
+        value: targetOf(setting),
         previous: result.previous,
       })
     }
@@ -199,30 +215,32 @@ function deletePath(object, key) {
   }
 }
 
-// The number stored at `key`, or undefined when absent. Anything else is
-// refused: a value of the wrong shape is the user's to fix, not ours to guess at.
-export function readSetting(configPath, key) {
+// The value stored at `key`, or undefined when absent. A value of another type
+// than the setting expects is refused: it is the user's to fix, not ours to
+// guess at.
+export function readSetting(configPath, key, type = "number") {
   const config = readConfig(configPath)
   if (!config) return undefined
 
   const value = getPath(config, key)
-  if (value !== undefined && typeof value !== "number") {
-    throw new Error(`${configPath}: ${key} is ${JSON.stringify(value)}, not a number — set it yourself`)
+  if (value !== undefined && typeof value !== type) {
+    throw new Error(`${configPath}: ${key} is ${JSON.stringify(value)}, not a ${type} — set it yourself`)
   }
 
-  setPath(structuredClone(config), key, 0) // throws if a parent is not an object
+  setPath(structuredClone(config), key, value ?? 0) // throws if a parent is not an object
   return value
 }
 
-// Raise `key` to at least `min`. A value already at or above it is left alone;
-// a value is never lowered.
-export function ensureSetting(configPath, key, min) {
-  const current = readSetting(configPath, key)
-  if (current !== undefined && current >= min) return { changed: false, current }
+// Bring `key` to `target`. A number is raised to at least the target and never
+// lowered; a flag is set to the target. A value that already meets it is left
+// alone.
+export function ensureSetting(configPath, key, target) {
+  const current = readSetting(configPath, key, typeof target)
+  if (isMet(target, current)) return { changed: false, current }
 
   const existed = existsSync(configPath)
   const config = readConfig(configPath) ?? { $schema: CONFIG_SCHEMA }
-  setPath(config, key, min)
+  setPath(config, key, target)
 
   const backup = existed ? backupFile(configPath) : undefined
   writeConfig(configPath, config)

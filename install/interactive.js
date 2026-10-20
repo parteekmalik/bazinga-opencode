@@ -2,7 +2,15 @@ import { existsSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import * as p from "@clack/prompts"
 
-import { applyPlan, buildPlan, pendingSettings, resolveDestination, uninstall } from "./apply.js"
+import {
+  applyPlan,
+  buildPlan,
+  describeTarget,
+  pendingSettings,
+  resolveDestination,
+  targetOf,
+  uninstall,
+} from "./apply.js"
 import { readReceipt, receiptPath, removeReceipt, writeReceipt } from "./receipt.js"
 import { listComponents, resolveSelection } from "./resolve.js"
 
@@ -126,7 +134,7 @@ async function askSettings(plan, flags, config) {
 
   const lines = pending.map(
     (setting) =>
-      `${setting.key} → at least ${setting.min}  (now ${setting.current ?? "unset"}) in ${setting.configPath}\n  ${setting.reason}`,
+      `${setting.key} → ${describeTarget(setting)}  (now ${setting.current ?? "unset"}) in ${setting.configPath}\n  ${setting.reason}`,
   )
   p.note(lines.join("\n\n"), "Settings these components need")
 
@@ -148,7 +156,7 @@ function describePlan(plan, config, settings) {
   }
   if (config && settings) {
     for (const setting of pendingSettings(plan)) {
-      lines.push(`~ ${setting.configPath} → ${setting.key}: ${setting.min}`)
+      lines.push(`~ ${setting.configPath} → ${setting.key}: ${targetOf(setting)}`)
     }
   }
   return lines.join("\n")

@@ -371,30 +371,37 @@ function planFor(root, keys) {
   return buildPlan(repoRoot, resolveSelection(registry, { only: keys }), destination)
 }
 
-test("the manager alone needs two levels; the worker needs none", (t) => {
+const TODO = "experimental.todo"
+
+test("the manager alone needs two levels and the to-do flag; the worker needs nothing", (t) => {
   const root = tempDir(t)
 
   const manager = pendingSettings(planFor(root, ["agent:01-manager"]))
-  assert.equal(manager.length, 1)
-  assert.equal(manager[0].min, 2)
+  assert.deepEqual(
+    manager.map((setting) => [setting.key, setting.min ?? setting.value]),
+    [[DEPTH, 2], [TODO, true]],
+  )
 
   assert.deepEqual(pendingSettings(planFor(root, ["agent:worker"])), [])
 })
 
 test("with the ceo and the manager the depth is set once, at the higher minimum", (t) => {
   const root = tempDir(t)
+  const configPath = join(root, "opencode.json")
   const plan = planFor(root, ["agent:01-manager", "agent:ceo", "agent:worker"])
 
   const result = applyPlan(plan, { settings: true })
 
   assert.deepEqual(result.settings, [
-    { path: join(root, "opencode.json"), key: DEPTH, value: 3, previous: null },
+    { path: configPath, key: DEPTH, value: 3, previous: null },
+    { path: configPath, key: TODO, value: true, previous: null },
   ])
-  assert.equal(readSetting(join(root, "opencode.json"), DEPTH), 3)
+  assert.equal(readSetting(configPath, DEPTH), 3)
+  assert.equal(readSetting(configPath, TODO, "boolean"), true)
 
   writeReceipt(root, { version: 1, destination: root, ...result })
   uninstall(readReceipt(root))
-  assert.equal(readJson(join(root, "opencode.json")).experimental, undefined)
+  assert.equal(readJson(configPath).experimental, undefined)
 })
 
 test("the manager alone writes 2, and leaves a higher existing value alone", (t) => {
@@ -404,10 +411,49 @@ test("the manager alone writes 2, and leaves a higher existing value alone", (t)
   applyPlan(planFor(root, ["agent:01-manager"]), { settings: true })
   assert.equal(readSetting(configPath, DEPTH), 2)
 
-  writeFileSync(configPath, JSON.stringify({ experimental: { subagent_depth: 4 } }))
+  writeFileSync(configPath, JSON.stringify({ experimental: { subagent_depth: 4, todo: true } }))
   const again = applyPlan(planFor(root, ["agent:01-manager"]), { force: true, settings: true })
   assert.deepEqual(again.settings, [])
   assert.equal(readSetting(configPath, DEPTH), 4)
+})
+
+test("a flag is set when missing and left alone when already on", (t) => {
+  const configPath = join(tempDir(t), "opencode.json")
+
+  const first = ensureSetting(configPath, TODO, true)
+  assert.deepEqual([first.changed, first.previous], [true, null])
+  assert.equal(readSetting(configPath, TODO, "boolean"), true)
+
+  assert.equal(ensureSetting(configPath, TODO, true).changed, false)
+})
+
+test("a flag the user turned off is switched on only through an explicit setting, and restored", (t) => {
+  const root = tempDir(t)
+  const configPath = join(root, "opencode.json")
+  writeFileSync(configPath, JSON.stringify({ experimental: { todo: false, other: 1 } }))
+
+  const result = applyPlan(planFor(root, ["agent:01-manager"]), { settings: true })
+  const todo = result.settings.find((setting) => setting.key === TODO)
+  assert.deepEqual([todo.value, todo.previous], [true, false])
+  assert.equal(readSetting(configPath, TODO, "boolean"), true)
+
+  writeReceipt(root, { version: 1, destination: root, ...result })
+  uninstall(readReceipt(root))
+  assert.deepEqual(readJson(configPath).experimental, { todo: false, other: 1 })
+})
+
+test("a flag of the wrong type is refused untouched", (t) => {
+  const configPath = join(tempDir(t), "opencode.json")
+  writeFileSync(configPath, JSON.stringify({ experimental: { todo: "yes" } }))
+
+  assert.throws(() => ensureSetting(configPath, TODO, true), /not a boolean/)
+  assert.deepEqual(readJson(configPath), { experimental: { todo: "yes" } })
+})
+
+test("the manager's to-do rule matches a tool the flag actually enables", () => {
+  const manager = listComponents(registry).find((component) => component.key === "agent:01-manager")
+  assert.ok(manager.settings.some((setting) => setting.key === TODO && setting.value === true))
+  assert.ok(readAgent("01-manager").rules.some((rule) => rule.action === "todowrite" && rule.effect === "allow"))
 })
 
 test("ensureSetting creates the nested key and the config when none exists", (t) => {

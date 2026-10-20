@@ -11,8 +11,9 @@ OpenCode 2 only.
 and three agents ship: `ceo` (tool-less coordinator), `01-manager` (splits one
 task into worker jobs) and `worker` (one narrow job, read/search/edit only).
 The skill and command slots are empty. Install any agent alone, for example
-`--only agent:worker`. The CEO needs `experimental.subagent_depth` raised so it
-can launch managers that launch workers; the installer offers to set it. See
+`--only agent:worker`. The team needs two config values: `experimental.subagent_depth`
+raised so the CEO can launch managers that launch workers, and `experimental.todo`
+so managers have OpenCode's to-do tool. The installer offers to set both. See
 [SKELETON.md](SKELETON.md) for the scaffold and [PLAN.md](PLAN.md) for the build.
 
 ## Install
@@ -74,7 +75,7 @@ default and records the rejected value in the log.
 node --test tests/
 ```
 
-53 tests covering selection, destinations, install, config merge, uninstall, the
+57 tests covering selection, destinations, install, config merge, uninstall, the
 three agents' permissions and the config settings they need.
 No test dependency: Node's built-in runner.
 
