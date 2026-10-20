@@ -10,7 +10,7 @@
 
 An OpenCode plugin that provides a stable skeleton for agentic work on *any* project:
 
-- two roles — a tool-less **CEO** and a tool-ful **01-manager**
+- two roles — a tool-less **CEO** and a tool-ful **general-manager**
 - one contract between them — a **brief** down, one **terminal report** up
 - the machinery that makes that contract hold: spawn-time context injection, a codebase map, task isolation, and the records the CEO reasons over
 
@@ -40,7 +40,7 @@ The CLI copies only what is selected and records what it wrote.
 ```sh
 node bin/bazinga.js list
 node bin/bazinga.js install --global --only plugin:core
-node bin/bazinga.js install --global --only agent:ceo,agent:01-manager
+node bin/bazinga.js install --global --only agent:ceo,agent:general-manager
 node bin/bazinga.js install --global --all
 ```
 
@@ -233,7 +233,7 @@ The roster:
 | Artifact | Id | Role |
 |---|---|---|
 | Agent | `ceo` | Tool-less. Decompose, arbitrate, own the user channel |
-| Agent | `01-manager` | Tool-ful. Scope, build, verify, review, report |
+| Agent | `general-manager` | Tool-ful. Scope, build, verify, review, report |
 | Command | `/bazinga` | Show or switch the rules level |
 | Command | `/bazinga-init` | Write or remove the agent definition files |
 | Command | `/bazinga-doctor` | Probe host capabilities (B10) |
@@ -330,7 +330,7 @@ Two behaviours to design around:
 
 Isolation stops file collisions, **not semantic ones**. Two isolated tasks can still rename the same function. The interface index and the integration task cover that.
 
-Integration is an ordinary task managed by `01-manager`, with the merged surface as its write-set. No third role.
+Integration is an ordinary task managed by `general-manager`, with the merged surface as its write-set. No third role.
 
 ### B8 · Records
 
@@ -435,7 +435,7 @@ The middle row is not a loophole: following an existing convention discovers beh
 |---|---|---|
 | User | Requirements — what gets built | — |
 | CEO | Decomposition, arbitration, the user channel, what to ask | Decide product, approve a recommendation, expand the agreed request |
-| `01-manager` | Implementation, in-task decomposition, verification, tests, review | Ask the user, decide a requirement, execute an unagreed decision, broaden authority |
+| `general-manager` | Implementation, in-task decomposition, verification, tests, review | Ask the user, decide a requirement, execute an unagreed decision, broaden authority |
 
 Everyone recommends. **Only the user decides.**
 

@@ -8,12 +8,16 @@ OpenCode 2 only.
 ## Status
 
 **Skeleton plus a first team.** The installer and the load-proof plugin work,
-and three agents ship: `ceo` (tool-less coordinator), `01-manager` (splits one
-task into worker jobs) and `worker` (one narrow job, read/search/edit only).
+and three agents ship: `ceo` (tool-less coordinator), `general-manager` (splits one
+task into worker jobs) and `workers/general` (one narrow job, read/search/edit only;
+workers live in their own `workers/` folder, which is part of their agent id).
+Four MCP servers (`git`, `fetch`, `context7`, `serena`) install as config entries; see
+[INSTALL.md](INSTALL.md#mcp-servers).
 The skill and command slots are empty. Install any agent alone, for example
-`--only agent:worker`. The team needs two config values: `experimental.subagent_depth`
-raised so the CEO can launch managers that launch workers, and `experimental.todo`
-so managers have OpenCode's to-do tool. The installer offers to set both. See
+`--only agent:workers/general`. The team needs two config values:
+`experimental.subagent_depth` raised so the CEO can launch managers that launch
+workers, and `experimental.todo` so managers have OpenCode's to-do tool. The
+installer offers to set both. See
 [SKELETON.md](SKELETON.md) for the scaffold and [PLAN.md](PLAN.md) for the build.
 
 ## Install
@@ -75,8 +79,8 @@ default and records the rejected value in the log.
 node --test tests/
 ```
 
-57 tests covering selection, destinations, install, config merge, uninstall, the
-three agents' permissions and the config settings they need.
+82 tests covering selection, destinations, install, config merge, uninstall, the
+three agents' permissions, the config settings they need and the MCP servers.
 No test dependency: Node's built-in runner.
 
 ## License

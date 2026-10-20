@@ -8,13 +8,21 @@ import test from "node:test"
 import {
   applyPlan,
   buildPlan,
+  commandExists,
+  configStatus,
+  describeServer,
   ensureSetting,
   mergeConfig,
+  mergeServer,
+  missingRuntimes,
+  needsConfig,
   pendingSettings,
   readSetting,
   removeConfigEntry,
+  removeServer,
   resolveDestination,
   restoreSetting,
+  serverStates,
   uninstall,
 } from "../install/apply.js"
 import { readReceipt, removeReceipt, writeReceipt } from "../install/receipt.js"
@@ -45,9 +53,11 @@ function installInto(root, options) {
 
 // --- registry and selection ------------------------------------------------
 
-const EVERYTHING = ["plugin:core", "agent:ceo", "agent:01-manager", "agent:worker"]
+const TEAM = ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general"]
+const MCPS = ["mcp:git", "mcp:fetch", "mcp:context7", "mcp:serena"]
+const EVERYTHING = [...TEAM, ...MCPS]
 
-test("the registry exposes the plugin and the three agents", () => {
+test("the registry exposes the plugin, the three agents and the MCP servers", () => {
   const components = listComponents(registry)
   assert.deepEqual(components.map((component) => component.key), EVERYTHING)
 
@@ -71,7 +81,11 @@ test("--all selects every component", () => {
 test("--profile selects a declared bundle", () => {
   assert.deepEqual(
     resolveSelection(registry, { profile: "full" }).map((component) => component.key),
-    EVERYTHING,
+    TEAM,
+  )
+  assert.deepEqual(
+    resolveSelection(registry, { profile: "mcp" }).map((component) => component.key),
+    MCPS,
   )
   assert.deepEqual(
     resolveSelection(registry, { profile: "plugin" }).map((component) => component.key),
@@ -269,32 +283,32 @@ const allowed = (agent) =>
   agent.rules.filter((rule) => rule.effect === "allow").map((rule) => `${rule.action}:${rule.resource}`)
 
 // The CEO is tool-less by design. If this list changes, change it on purpose.
-test("the ceo is a primary agent that denies everything except launching 01-manager", () => {
+test("the ceo is a primary agent that denies everything except launching general-manager", () => {
   const ceo = readAgent("ceo")
 
   assert.ok(ceo.description)
   assert.equal(ceo.mode, "primary")
   assert.deepEqual(ceo.rules, [
     { action: "*", resource: "*", effect: "deny" },
-    { action: "subagent", resource: "01-manager", effect: "allow" },
+    { action: "subagent", resource: "general-manager", effect: "allow" },
   ])
   assert.ok(ceo.body.length > 0, "the prompt body must not be empty")
 })
 
 // The manager works only through workers. It has no way to read, edit or run.
 test("the manager is a subagent that may launch workers and keep a to-do list, nothing else", () => {
-  const manager = readAgent("01-manager")
+  const manager = readAgent("general-manager")
 
   assert.ok(manager.description)
   assert.equal(manager.mode, "subagent")
   assert.deepEqual(manager.rules[0], { action: "*", resource: "*", effect: "deny" })
-  assert.deepEqual(allowed(manager), ["subagent:worker", "todowrite:*"])
+  assert.deepEqual(allowed(manager), ["subagent:workers/*", "todowrite:*"])
   assert.ok(manager.body.length > 0)
 })
 
 // The worker is a leaf: it cannot run commands, ask, or launch anything.
 test("the worker is a leaf that can read, search and edit but never run or launch", () => {
-  const worker = readAgent("worker")
+  const worker = readAgent("workers/general")
 
   assert.ok(worker.description)
   assert.equal(worker.mode, "subagent")
@@ -308,7 +322,7 @@ test("the worker is a leaf that can read, search and edit but never run or launc
 // Rules are appended after the global defaults and the last match wins, so a
 // broad allow would re-open files the defaults protect unless a deny follows it.
 test("the worker re-denies secret files after its broad read and edit allows", () => {
-  const { rules } = readAgent("worker")
+  const { rules } = readAgent("workers/general")
   const lastIndex = (action, resource, effect) =>
     rules.findLastIndex((rule) => rule.action === action && rule.resource === resource && rule.effect === effect)
 
@@ -320,21 +334,48 @@ test("the worker re-denies secret files after its broad read and edit allows", (
   }
 })
 
-test("every agent an agent may launch is a registered agent", () => {
-  const registered = new Set(
-    listComponents(registry)
-      .filter((component) => component.type === "agent")
-      .map((component) => component.id),
+// A permission resource is a glob where * matches anything, slashes included
+// (checked against OpenCode: "workers/*" allowed workers/alpha, refused "other").
+const globMatches = (pattern, value) =>
+  new RegExp(`^${pattern.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`).test(value)
+
+const registeredAgents = () =>
+  listComponents(registry)
+    .filter((component) => component.type === "agent")
+    .map((component) => component.id)
+
+// Which registered agents an agent's allow rules for `subagent` let it launch.
+const launchable = (agent) =>
+  registeredAgents().filter((id) =>
+    agent.rules.some((rule) => rule.action === "subagent" && rule.effect === "allow" && globMatches(rule.resource, id)),
   )
 
-  for (const id of registered) {
-    const agent = readAgent(id)
-    for (const rule of agent.rules) {
+test("every subagent rule that allows something matches at least one registered agent", () => {
+  for (const id of registeredAgents()) {
+    for (const rule of readAgent(id).rules) {
       if (rule.action === "subagent" && rule.effect === "allow") {
-        assert.ok(registered.has(rule.resource), `${id} may launch "${rule.resource}", which is not registered`)
+        const matches = registeredAgents().filter((other) => globMatches(rule.resource, other))
+        assert.ok(matches.length > 0, `${id} may launch "${rule.resource}", which matches no registered agent`)
       }
     }
   }
+})
+
+test("the manager can launch every worker, and the ceo can launch none of them", () => {
+  const workers = registeredAgents().filter((id) => id.startsWith("workers/"))
+  assert.ok(workers.length > 0)
+
+  assert.deepEqual(launchable(readAgent("general-manager")), workers)
+  assert.deepEqual(launchable(readAgent("ceo")), ["general-manager"])
+  for (const worker of workers) assert.deepEqual(launchable(readAgent(worker)), [], `${worker} must launch nothing`)
+})
+
+test("the glob matcher treats * as anything, slashes included, and nothing else as special", () => {
+  assert.equal(globMatches("workers/*", "workers/general"), true)
+  assert.equal(globMatches("workers/*", "workers/deep/er"), true)
+  assert.equal(globMatches("workers/*", "general-manager"), false)
+  assert.equal(globMatches("workers/*", "other/workers/general"), false)
+  assert.equal(globMatches("a.b", "aXb"), false)
 })
 
 test("every registered agent ships a file with the declared source and destination", () => {
@@ -376,19 +417,19 @@ const TODO = "experimental.todo"
 test("the manager alone needs two levels and the to-do flag; the worker needs nothing", (t) => {
   const root = tempDir(t)
 
-  const manager = pendingSettings(planFor(root, ["agent:01-manager"]))
+  const manager = pendingSettings(planFor(root, ["agent:general-manager"]))
   assert.deepEqual(
     manager.map((setting) => [setting.key, setting.min ?? setting.value]),
     [[DEPTH, 2], [TODO, true]],
   )
 
-  assert.deepEqual(pendingSettings(planFor(root, ["agent:worker"])), [])
+  assert.deepEqual(pendingSettings(planFor(root, ["agent:workers/general"])), [])
 })
 
 test("with the ceo and the manager the depth is set once, at the higher minimum", (t) => {
   const root = tempDir(t)
   const configPath = join(root, "opencode.json")
-  const plan = planFor(root, ["agent:01-manager", "agent:ceo", "agent:worker"])
+  const plan = planFor(root, ["agent:general-manager", "agent:ceo", "agent:workers/general"])
 
   const result = applyPlan(plan, { settings: true })
 
@@ -408,11 +449,11 @@ test("the manager alone writes 2, and leaves a higher existing value alone", (t)
   const root = tempDir(t)
   const configPath = join(root, "opencode.json")
 
-  applyPlan(planFor(root, ["agent:01-manager"]), { settings: true })
+  applyPlan(planFor(root, ["agent:general-manager"]), { settings: true })
   assert.equal(readSetting(configPath, DEPTH), 2)
 
   writeFileSync(configPath, JSON.stringify({ experimental: { subagent_depth: 4, todo: true } }))
-  const again = applyPlan(planFor(root, ["agent:01-manager"]), { force: true, settings: true })
+  const again = applyPlan(planFor(root, ["agent:general-manager"]), { force: true, settings: true })
   assert.deepEqual(again.settings, [])
   assert.equal(readSetting(configPath, DEPTH), 4)
 })
@@ -432,7 +473,7 @@ test("a flag the user turned off is switched on only through an explicit setting
   const configPath = join(root, "opencode.json")
   writeFileSync(configPath, JSON.stringify({ experimental: { todo: false, other: 1 } }))
 
-  const result = applyPlan(planFor(root, ["agent:01-manager"]), { settings: true })
+  const result = applyPlan(planFor(root, ["agent:general-manager"]), { settings: true })
   const todo = result.settings.find((setting) => setting.key === TODO)
   assert.deepEqual([todo.value, todo.previous], [true, false])
   assert.equal(readSetting(configPath, TODO, "boolean"), true)
@@ -451,9 +492,9 @@ test("a flag of the wrong type is refused untouched", (t) => {
 })
 
 test("the manager's to-do rule matches a tool the flag actually enables", () => {
-  const manager = listComponents(registry).find((component) => component.key === "agent:01-manager")
+  const manager = listComponents(registry).find((component) => component.key === "agent:general-manager")
   assert.ok(manager.settings.some((setting) => setting.key === TODO && setting.value === true))
-  assert.ok(readAgent("01-manager").rules.some((rule) => rule.action === "todowrite" && rule.effect === "allow"))
+  assert.ok(readAgent("general-manager").rules.some((rule) => rule.action === "todowrite" && rule.effect === "allow"))
 })
 
 test("ensureSetting creates the nested key and the config when none exists", (t) => {
@@ -572,6 +613,35 @@ test("pendingSettings lists only what the config does not already satisfy", (t) 
   assert.deepEqual(pendingSettings(plan), [])
 })
 
+test("uninstall removes the folders it created for a nested agent, but not the destination", (t) => {
+  const root = tempDir(t)
+  const destination = resolveDestination({ target: root })
+  const plan = buildPlan(repoRoot, resolveSelection(registry, { only: ["agent:workers/general"] }), destination)
+  const result = applyPlan(plan)
+  assert.ok(existsSync(join(root, "agents", "workers", "general.md")))
+
+  writeReceipt(root, { version: 1, destination: root, ...result })
+  uninstall(readReceipt(root))
+
+  assert.equal(existsSync(join(root, "agents")), false, "empty agents/ should be gone")
+  assert.equal(existsSync(root), true, "the destination itself stays")
+})
+
+test("uninstall keeps a folder that still holds someone else's file", (t) => {
+  const root = tempDir(t)
+  const destination = resolveDestination({ target: root })
+  const plan = buildPlan(repoRoot, resolveSelection(registry, { only: ["agent:workers/general"] }), destination)
+  const result = applyPlan(plan)
+
+  const mine = join(root, "agents", "workers", "mine.md")
+  writeFileSync(mine, "keep\n")
+  writeReceipt(root, { version: 1, destination: root, ...result })
+  uninstall(readReceipt(root))
+
+  assert.equal(existsSync(mine), true)
+  assert.equal(existsSync(join(root, "agents", "workers", "general.md")), false)
+})
+
 test("uninstall puts a raised setting back to its previous value", (t) => {
   const root = tempDir(t)
   const configPath = join(root, "opencode.json")
@@ -624,6 +694,55 @@ test("a setting already satisfied is not recorded, so uninstall leaves it alone"
   writeReceipt(root, { version: 1, destination: root, ...result })
   uninstall(readReceipt(root))
   assert.equal(readSetting(configPath, DEPTH), 4)
+})
+
+// --- is there a config to change? -----------------------------------------
+
+test("configStatus reports a folder with no opencode.json", (t) => {
+  const root = tempDir(t)
+  const status = configStatus(resolveDestination({ target: root }))
+
+  assert.equal(status.path, join(root, "opencode.json"))
+  assert.equal(status.exists, false)
+  assert.equal(status.jsonc, false)
+})
+
+test("configStatus sees an existing opencode.json", (t) => {
+  const root = tempDir(t)
+  writeFileSync(join(root, "opencode.json"), "{}")
+
+  assert.equal(configStatus(resolveDestination({ target: root })).exists, true)
+})
+
+test("configStatus notices an opencode.jsonc without treating it as editable", (t) => {
+  const root = tempDir(t)
+  writeFileSync(join(root, "opencode.jsonc"), "{ // comment\n}")
+  const status = configStatus(resolveDestination({ target: root }))
+
+  assert.equal(status.exists, false)
+  assert.equal(status.jsonc, true)
+})
+
+test("for a project, the config is checked at the project root, not in .opencode", (t) => {
+  const root = tempDir(t)
+  const destination = resolveDestination({ project: true, cwd: root })
+
+  assert.equal(configStatus(destination).path, join(root, "opencode.json"))
+})
+
+test("only components that register or declare settings need the config", () => {
+  const pick = (...keys) => resolveSelection(registry, { only: keys })
+
+  assert.equal(needsConfig(pick("plugin:core")), true)
+  assert.equal(needsConfig(pick("agent:ceo")), true)
+  assert.equal(needsConfig(pick("agent:workers/general")), false)
+})
+
+test("--no-config means the config is never needed", () => {
+  const everything = resolveSelection(registry, { all: true })
+
+  assert.equal(needsConfig(everything), true)
+  assert.equal(needsConfig(everything, { config: false }), false)
 })
 
 test("buildPlan rejects a registry entry with a missing source", () => {
@@ -734,4 +853,189 @@ test("receipt roundtrip and uninstall remove exactly what was recorded", (t) => 
 test("readReceipt rejects a destination without one", (t) => {
   const root = tempDir(t)
   assert.throws(() => readReceipt(root), /no install receipt/)
+})
+
+// --- MCP servers -----------------------------------------------------------
+
+const GIT = { type: "local", command: ["uvx", "mcp-server-git"] }
+
+function mcpPlan(root, keys = MCPS) {
+  return planFor(root, keys)
+}
+
+test("every mcp entry is a config-only component with a local command or a remote url", () => {
+  const mcps = listComponents(registry).filter((component) => component.type === "mcp")
+  assert.deepEqual(mcps.map((component) => component.key), MCPS)
+
+  for (const mcp of mcps) {
+    assert.equal(mcp.source, undefined, `${mcp.key} must not copy files`)
+    assert.ok(mcp.description)
+    if (mcp.server.type === "remote") assert.match(mcp.server.url, /^https:\/\//)
+    else {
+      assert.equal(mcp.server.type, "local")
+      assert.ok(mcp.server.command.length > 0)
+      assert.ok(mcp.requires?.includes(mcp.server.command[0]), `${mcp.key} must declare the program it runs`)
+    }
+  }
+})
+
+test("mergeServer creates the config and the mcp.servers path", (t) => {
+  const root = tempDir(t)
+  const path = join(root, "opencode.json")
+
+  assert.deepEqual(mergeServer(path, "git", GIT), { changed: true, backup: undefined })
+  assert.deepEqual(readJson(path).mcp.servers.git, GIT)
+})
+
+test("mergeServer keeps everything else in the config, and backs up an existing file", (t) => {
+  const root = tempDir(t)
+  const path = join(root, "opencode.json")
+  writeFileSync(path, JSON.stringify({ model: "x", mcp: { servers: { other: { type: "remote", url: "https://a" } } } }))
+
+  const result = mergeServer(path, "git", GIT)
+
+  assert.equal(result.changed, true)
+  assert.ok(existsSync(result.backup))
+  const config = readJson(path)
+  assert.equal(config.model, "x")
+  assert.deepEqual(Object.keys(config.mcp.servers), ["other", "git"])
+})
+
+test("mergeServer never replaces a server that already has that name", (t) => {
+  const root = tempDir(t)
+  const path = join(root, "opencode.json")
+  writeFileSync(path, JSON.stringify({ mcp: { servers: { git: { type: "local", command: ["mine"] } } } }))
+  const before = readFileSync(path, "utf8")
+
+  assert.deepEqual(mergeServer(path, "git", GIT), { changed: false })
+  assert.equal(readFileSync(path, "utf8"), before, "the file must be untouched")
+})
+
+test("a config whose mcp section has the wrong shape is refused, not overwritten", (t) => {
+  const root = tempDir(t)
+  const path = join(root, "opencode.json")
+
+  for (const bad of [{ mcp: "nope" }, { mcp: { servers: [] } }]) {
+    writeFileSync(path, JSON.stringify(bad))
+    assert.throws(() => mergeServer(path, "git", GIT), /is not an object/)
+    assert.throws(() => applyPlan(mcpPlan(root, ["mcp:git"])), /is not an object/)
+    assert.deepEqual(readJson(path), bad)
+  }
+})
+
+test("removeServer removes only an entry that is still what was written, and prunes empties", (t) => {
+  const root = tempDir(t)
+  const path = join(root, "opencode.json")
+  mergeServer(path, "git", GIT)
+
+  assert.equal(removeServer(path, "git", GIT), true)
+  assert.equal(readJson(path).mcp, undefined, "empty mcp.servers and mcp are pruned")
+  assert.equal(removeServer(path, "git", GIT), false, "nothing left to remove")
+})
+
+test("removeServer leaves a server the user edited, and its siblings", (t) => {
+  const root = tempDir(t)
+  const path = join(root, "opencode.json")
+  const fetch = { type: "local", command: ["uvx", "mcp-server-fetch"] }
+  mergeServer(path, "git", GIT)
+  mergeServer(path, "fetch", fetch)
+
+  const config = readJson(path)
+  config.mcp.servers.git.command.push("--changed")
+  writeFileSync(path, JSON.stringify(config))
+
+  assert.equal(removeServer(path, "git", GIT), false)
+  assert.equal(removeServer(path, "fetch", fetch), true)
+  assert.deepEqual(Object.keys(readJson(path).mcp.servers), ["git"])
+})
+
+test("serverStates tells new servers from configured ones", (t) => {
+  const root = tempDir(t)
+  writeFileSync(join(root, "opencode.json"), JSON.stringify({ mcp: { servers: { git: { type: "local", command: ["mine"] } } } }))
+
+  const states = serverStates(mcpPlan(root, ["mcp:git", "mcp:fetch"]))
+  assert.deepEqual(states.map((state) => [state.name, state.present]), [["git", true], ["fetch", false]])
+  assert.deepEqual(states[0].existing, { type: "local", command: ["mine"] })
+})
+
+test("installing mcp servers adds new ones, skips existing ones, and records only what it added", (t) => {
+  const root = tempDir(t)
+  writeFileSync(join(root, "opencode.json"), JSON.stringify({ mcp: { servers: { git: { type: "local", command: ["mine"] } } } }))
+
+  const result = applyPlan(mcpPlan(root, ["mcp:git", "mcp:fetch"]))
+
+  assert.deepEqual(result.servers.map((server) => server.name), ["fetch"])
+  assert.deepEqual(result.skipped.map((item) => [item.name, item.reason]), [["git", "already configured"]])
+  assert.deepEqual(result.paths, [])
+  assert.deepEqual(readJson(join(root, "opencode.json")).mcp.servers.git, { type: "local", command: ["mine"] })
+
+  writeReceipt(root, { version: 1, destination: root, ...result })
+  uninstall(readReceipt(root))
+
+  assert.deepEqual(Object.keys(readJson(join(root, "opencode.json")).mcp.servers), ["git"])
+})
+
+test("mcp servers are config-only: no files copied, and --no-config skips them", (t) => {
+  const root = tempDir(t)
+  const plan = mcpPlan(root, ["mcp:git"])
+  assert.equal(needsConfig(plan.map((item) => item.component)), true)
+  assert.equal(needsConfig(plan.map((item) => item.component), { config: false }), false)
+
+  const result = applyPlan(plan, { config: false })
+  assert.deepEqual(result.servers, [])
+  assert.deepEqual(result.skipped.map((item) => item.reason), ["config changes are off"])
+  assert.equal(existsSync(join(root, "opencode.json")), false)
+})
+
+test("choosing a server is its own consent: servers: true works with config: false", (t) => {
+  const root = tempDir(t)
+  const result = applyPlan(mcpPlan(root, ["mcp:git"]), { config: false, servers: true })
+
+  assert.deepEqual(result.servers.map((server) => server.name), ["git"])
+  assert.deepEqual(readJson(join(root, "opencode.json")).mcp.servers.git, GIT)
+})
+
+test("an mcp install and a plugin install share one config without clobbering each other", (t) => {
+  const root = tempDir(t)
+  const result = applyPlan(planFor(root, ["plugin:core", "mcp:git"]))
+
+  const config = readJson(join(root, "opencode.json"))
+  assert.equal(result.servers.length, 1)
+  assert.equal(result.configs.length, 1)
+  assert.equal(config.plugins.length, 1)
+  assert.deepEqual(config.mcp.servers.git, GIT)
+})
+
+test("commandExists looks through PATH, and accepts an explicit path", (t) => {
+  const root = tempDir(t)
+  const program = join(root, "tool")
+  writeFileSync(program, "#!/bin/sh\n", { mode: 0o755 })
+  writeFileSync(join(root, "plain"), "x", { mode: 0o644 })
+
+  assert.equal(commandExists("tool", { PATH: root }), true)
+  assert.equal(commandExists("plain", { PATH: root }), false, "not executable")
+  assert.equal(commandExists("nothing", { PATH: root }), false)
+  assert.equal(commandExists("tool", {}), false)
+  assert.equal(commandExists(program, {}), true)
+})
+
+test("missingRuntimes names what is absent, and ignores servers that are already configured", (t) => {
+  const root = tempDir(t)
+  const saved = process.env.PATH
+  process.env.PATH = root
+  t.after(() => {
+    process.env.PATH = saved
+  })
+
+  const missing = missingRuntimes(mcpPlan(root))
+  assert.deepEqual(missing.map((item) => [item.name, item.command]), [["git", "uvx"], ["fetch", "uvx"], ["serena", "serena"]])
+  assert.ok(missing.every((item) => item.hint))
+
+  writeFileSync(join(root, "opencode.json"), JSON.stringify({ mcp: { servers: { git: {}, fetch: {} } } }))
+  assert.deepEqual(missingRuntimes(mcpPlan(root)).map((item) => item.name), ["serena"])
+})
+
+test("describeServer gives one line for either kind", () => {
+  assert.equal(describeServer(GIT), "uvx mcp-server-git")
+  assert.equal(describeServer({ type: "remote", url: "https://x/mcp" }), "https://x/mcp")
 })

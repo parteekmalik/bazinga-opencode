@@ -13,20 +13,31 @@ components into an OpenCode folder and records exactly what it wrote.
 | `commands` | `command:<id>` | `commands/` |
 
 Today the registry holds `plugin:core` and three agents: `agent:ceo`,
-`agent:01-manager` and `agent:worker`. The skill and command slots are empty in
-this skeleton; the installer already handles them.
+`agent:general-manager` and `agent:workers/general`. The skill and command slots
+are empty in this skeleton; the installer already handles them.
 
 | Agent | Role | What it may do |
 | --- | --- | --- |
-| `ceo` | Primary. Plans, arbitrates, the only one that talks to you | Launch `01-manager` only |
-| `01-manager` | Subagent. Owns one task, splits it into worker jobs | Launch `worker`; keep its plan in OpenCode's to-do list (`todowrite`) |
-| `worker` | Subagent. One narrow job, minimal report | Read, search and edit files. No commands, no launching, no secret files |
+| `ceo` | Primary. Plans, arbitrates, the only one that talks to you | Launch `general-manager` only |
+| `general-manager` | Subagent. Owns one task, splits it into worker jobs | Launch any agent in `workers/`; keep its plan in OpenCode's to-do list (`todowrite`) |
+| `workers/general` | Subagent. One narrow job, minimal report | Read, search and edit files. No commands, no launching, no secret files |
+
+**Workers live in their own folder.** In OpenCode a nested path becomes part of the
+agent id, so `agents/workers/general.md` is the agent `workers/general`. The manager
+is allowed to launch `workers/*`, which means a worker added to that folder later
+(find references, web search, review) can be launched without editing the manager.
+The CEO cannot launch workers; it goes through a manager.
+
+Renamed from earlier versions, which left files an ordinary reinstall will not
+remove: the manager was `01-manager` and the worker was `worker`. If you installed
+those, run `uninstall` for that destination first, then install again. Otherwise the
+old `agents/01-manager.md` and `agents/worker.md` stay behind next to the new files.
 
 Each agent is a single Markdown file, and installing one on its own copies
 `agents/<id>.md` and nothing else: no plugin and no `opencode.json` change. They
-are meant to be used together: the CEO launches `01-manager` and the manager
-launches `worker`, so installing the CEO without the other two leaves it nobody
-to delegate to. `agent:01-manager` and `agent:ceo` also need a raised
+are meant to be used together: the CEO launches `general-manager` and the manager
+launches a worker, so installing the CEO without the other two leaves it nobody
+to delegate to. `agent:general-manager` and `agent:ceo` also need a raised
 `experimental.subagent_depth` (next sections).
 
 ## Quick start
@@ -79,13 +90,56 @@ node bin/bazinga.js install --global --only plugin:core,skill:base-contract
 ```
 
 Selection can be repeated and combined. Profiles are declared in
-`registry.json`.
+`registry.json`. `--all` selects everything, MCP servers included; the `full`
+profile is the plugin and the agent team only.
+
+## MCP servers
+
+Four MCP servers can be installed as components of type `mcp`:
+
+| Id | Runs | Needs |
+| --- | --- | --- |
+| `mcp:git` | `uvx mcp-server-git` | `uvx` ([uv](https://docs.astral.sh/uv/)) |
+| `mcp:fetch` | `uvx mcp-server-fetch` | `uvx` |
+| `mcp:context7` | remote, `https://mcp.context7.com/mcp` | nothing |
+| `mcp:serena` | `serena start-mcp-server --context agent --open-web-dashboard false` | `serena` on PATH: `uv tool install -p 3.13 serena-agent` |
+
+```bash
+node bin/bazinga.js install --global --profile mcp        # all four
+node bin/bazinga.js install --project --only mcp:git,mcp:fetch
+```
+
+In the interactive picker they are listed after the plugin and agents ("Let me
+pick"), each with a one-line description.
+
+An MCP server is not a file. Installing one adds `mcp.servers.<id>` to
+`opencode.json` (the V2 shape) and copies nothing. What that means:
+
+- **An existing server is never overwritten.** If `mcp.servers.git` is already in
+  the config, whatever it points at, it is left alone and reported as "already
+  configured". Your own setup always wins.
+- **Choosing a server is its own consent.** It does not need `--settings`. Only
+  `--no-config` stops it (the server is then reported as not added).
+- **Missing programs are a warning, not an error.** If `uvx` or `serena` is not on
+  PATH, the install still writes the entry and tells you what to install. The
+  check uses the installer's PATH; OpenCode's background service can have a
+  different one, so if Serena is installed but not found at startup, put its
+  absolute path in the entry.
+- **Uninstall removes only what was added**, and only if the entry is still
+  exactly what the installer wrote. A server you edited since stays. Empty
+  `mcp.servers` and `mcp` sections are removed.
+- Remote servers use OAuth by default in OpenCode; sign in from `/mcps` if the
+  list says "needs authentication".
+
+The agent team does not use these servers. `ceo`, `general-manager` and
+`workers/general` deny everything they are not explicitly given, so the MCP tools
+are available to your other agents only.
 
 ## What touches opencode.json
 
-Only a component with a `register` field does — in this skeleton, `plugin:core`.
-The installer appends its path to the `plugins` array and backs the file up
-first as `opencode.json.bak-bazinga-<timestamp>`.
+A component with a `register` field does — in this skeleton, `plugin:core`: the
+installer appends its path to the `plugins` array. An `mcp:*` component does too
+(see above). The file is backed up first as `opencode.json.bak-bazinga-<timestamp>`.
 
 Installing `agent:*`, `skill:*` or `command:*` does not register anything in
 `opencode.json`. A component can still declare a **setting** it needs, such as
@@ -95,7 +149,27 @@ changes a setting only when you say so: a yes in the interactive prompt, or
 value the component needs; if you had switched it off, the prompt shows that and
 uninstall puts your value back.
 
-Passing `--no-config` stops both the plugin registration and any settings change.
+Passing `--no-config` stops the plugin registration, any settings change and MCP
+servers.
+
+### When the folder has no opencode.json
+
+A folder with no config is often the wrong folder, so the installer checks. It
+looks for `opencode.json` where it would make the change: the project root for
+`--project` or "This project", OpenCode's config folder for global, or the folder
+you typed. It only checks when something you selected would edit the config (the
+plugin, an MCP server, or an agent that declares a setting) and `--no-config` was not given.
+
+- **Interactive:** it says "This directory doesn't contain a config file
+  (opencode.json)" with the path, then asks whether to **create opencode.json
+  here** or **choose a different folder**. Choosing a different folder asks for the
+  destination again and re-checks it. The plan then shows a new config as `+` and
+  an existing one as `~`.
+- **Command line:** flags never prompt, so the install goes ahead as before and
+  prints a note that no config existed and one was created (or, with `--dry-run`,
+  would be). If that is the wrong directory, pick another destination.
+- **`opencode.jsonc`:** OpenCode also reads this, but the installer does not edit
+  it because of its comments. If that is all the folder has, the message says so.
 
 ## Subagent depth
 
@@ -111,12 +185,12 @@ leaves one more level of headroom. Which agent may launch which is still decided
 by each agent's `subagent` permission rules, not by this number.
 
 **The installer can set it for you.** `agent:ceo` asks for at least 3 and
-`agent:01-manager` for at least 2. When you select either and the config does not
+`agent:general-manager` for at least 2. When you select either and the config does not
 already satisfy it, the interactive installer shows the current value and asks.
 Selecting both sets it once, to 3. On the command line:
 
 ```bash
-node bin/bazinga.js install --project --only agent:ceo,agent:01-manager,agent:worker --settings
+node bin/bazinga.js install --project --only agent:ceo,agent:general-manager,agent:workers/general --settings
 ```
 
 - The `opencode.json` it changes is the one for the chosen destination (the
@@ -148,7 +222,7 @@ agent allowed `todowrite` simply has no such tool. Turn it on with:
 { "experimental": { "todo": true } }
 ```
 
-`agent:01-manager` declares this setting, so the installer asks about it the same
+`agent:general-manager` declares this setting, so the installer asks about it the same
 way it asks about the depth: a yes in the interactive prompt, or `--settings`.
 The flag only makes the tool exist. Each agent's own `permissions` still decide
 who may call it, and here only the manager is allowed: the CEO and the worker deny

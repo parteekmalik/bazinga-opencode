@@ -5,9 +5,14 @@ import * as p from "@clack/prompts"
 import {
   applyPlan,
   buildPlan,
+  configStatus,
+  describeServer,
   describeTarget,
+  missingRuntimes,
+  needsConfig,
   pendingSettings,
   resolveDestination,
+  serverStates,
   targetOf,
   uninstall,
 } from "./apply.js"
@@ -110,6 +115,43 @@ async function askComponents(registry, flags) {
   return resolveSelection(registry, { only })
 }
 
+// Registering the plugin or setting a value both edit opencode.json. If the
+// folder that holds it has none, say so and let the user decide before anything
+// else is asked: a folder with no config is often the wrong folder. Choosing a
+// different one asks again, ignoring any destination flag, and re-checks.
+async function settleDestination(destination, components, flags) {
+  let current = destination
+
+  while (needsConfig(components, flags)) {
+    const status = configStatus(current)
+    if (status.exists) return current
+
+    p.log.warn(
+      `This directory doesn't contain a config file (opencode.json):\n${current.configRoot}` +
+        (status.jsonc ? "\nIt has an opencode.jsonc, but the installer only edits opencode.json." : ""),
+    )
+
+    const choice = answer(
+      await p.select({
+        message: "What would you like to do?",
+        options: [
+          {
+            value: "create",
+            label: "Create opencode.json here",
+            hint: "just the $schema line plus what you select",
+          },
+          { value: "change", label: "Choose a different folder" },
+        ],
+      }),
+    )
+    if (choice === "create") return current
+
+    current = await askDestination({}, "install")
+  }
+
+  return current
+}
+
 async function askConfig(components, flags) {
   if (flags.configExplicit) return flags.config
   if (!components.some((component) => component.register)) return true
@@ -146,17 +188,29 @@ async function askSettings(plan, flags, config) {
   )
 }
 
-function describePlan(plan, config, settings) {
+function describePlan(plan, config, settings, servers) {
+  // "+" for a file that will be created, "~" for one that will be edited.
+  const mark = (path) => (existsSync(path) ? "~" : "+")
+  const states = new Map(serverStates(plan).map((state) => [state.name, state]))
+
   const lines = []
   for (const item of plan) {
+    if (item.server) {
+      const name = item.component.id
+      if (!servers) lines.push(`- mcp.servers.${name}: skipped (--no-config)`)
+      else if (states.get(name).present) lines.push(`= mcp.servers.${name}: already configured, left as is`)
+      else lines.push(`${mark(item.configPath)} ${item.configPath} → mcp.servers.${name}: ${describeServer(item.server)}`)
+      continue
+    }
+
     lines.push(`+ ${item.installed}`)
     if (item.entry && config) {
-      lines.push(`~ ${item.configPath} → ${item.component.register}: ${item.entry}`)
+      lines.push(`${mark(item.configPath)} ${item.configPath} → ${item.component.register}: ${item.entry}`)
     }
   }
   if (config && settings) {
     for (const setting of pendingSettings(plan)) {
-      lines.push(`~ ${setting.configPath} → ${setting.key}: ${targetOf(setting)}`)
+      lines.push(`${mark(setting.configPath)} ${setting.configPath} → ${setting.key}: ${targetOf(setting)}`)
     }
   }
   return lines.join("\n")
@@ -166,13 +220,25 @@ export async function interactiveInstall({ repoRoot, registry, flags }) {
   p.intro(" bazinga — install ")
 
   try {
-    const destination = await askDestination(flags, "install")
+    const chosen = await askDestination(flags, "install")
     const components = await askComponents(registry, flags)
+    const destination = await settleDestination(chosen, components, flags)
     const config = await askConfig(components, flags)
     const plan = buildPlan(repoRoot, components, destination)
     const settings = await askSettings(plan, flags, config)
+    // Picking an MCP server is its own consent; only --no-config stops it.
+    const servers = !(flags.configExplicit && !flags.config)
 
-    p.note(describePlan(plan, config, settings), `Plan — ${destination.mode}`)
+    p.note(describePlan(plan, config, settings, servers), `Plan — ${destination.mode}`)
+
+    const missing = servers ? missingRuntimes(plan) : []
+    if (missing.length > 0) {
+      p.log.warn(
+        missing
+          .map((item) => `${item.name} needs "${item.command}", not found on PATH${item.hint ? `\n  ${item.hint}` : ""}`)
+          .join("\n"),
+      )
+    }
 
     if (flags.dryRun) {
       p.outro("Dry run — nothing written")
@@ -180,7 +246,7 @@ export async function interactiveInstall({ repoRoot, registry, flags }) {
     }
 
     let force = flags.force
-    const existing = plan.filter((item) => existsSync(item.installed))
+    const existing = plan.filter((item) => item.installed && existsSync(item.installed))
     if (existing.length > 0 && !force) {
       force = answer(
         await p.confirm({
@@ -197,7 +263,13 @@ export async function interactiveInstall({ repoRoot, registry, flags }) {
 
     const spinner = p.spinner()
     spinner.start("Installing")
-    const { paths, configs, settings: applied } = applyPlan(plan, { force, config, settings })
+    const {
+      paths,
+      configs,
+      settings: applied,
+      servers: added,
+      skipped,
+    } = applyPlan(plan, { force, config, settings, servers })
     writeReceipt(destination.destination, {
       version: 1,
       installedAt: new Date().toISOString(),
@@ -206,8 +278,13 @@ export async function interactiveInstall({ repoRoot, registry, flags }) {
       paths,
       configs,
       settings: applied,
+      servers: added,
     })
     spinner.stop(`Installed ${components.length} component(s)`)
+
+    if (skipped.length > 0) {
+      p.log.info(`Not added: ${skipped.map((item) => `${item.name} (${item.reason})`).join(", ")}`)
+    }
 
     p.log.info(`Receipt: ${receiptPath(destination.destination)}`)
     p.outro(`Undo with: bazinga uninstall --${destination.mode === "target" ? `target ${destination.destination}` : destination.mode}`)
@@ -233,6 +310,7 @@ export async function interactiveUninstall({ flags }) {
       ...(receipt.settings ?? []).map(
         (s) => `~ ${s.path} → ${s.key}: ${s.previous === null ? "remove" : `back to ${s.previous}`}`,
       ),
+      ...(receipt.servers ?? []).map((s) => `~ ${s.path} → remove mcp.servers.${s.name} (only if unchanged)`),
     ]
     p.note(lines.join("\n") || "(nothing recorded)", "Will remove")
 

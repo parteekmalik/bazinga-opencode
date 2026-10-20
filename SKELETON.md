@@ -5,7 +5,8 @@
 **Relation to `PLAN.md`:** this is phase 0 of §10, expanded into the frame the
 build sits in. `PLAN.md` is the build; this is what exists today.
 **Scope:** the load path, the component installer, and three agents (`ceo`,
-`01-manager`, `worker`). The skill and command slots are declared but empty.
+`general-manager`, `workers/general`). The skill and command slots are declared but
+empty.
 
 ---
 
@@ -25,7 +26,7 @@ can take the plugin, a skill, an agent, or any combination.
 
 | Absent | Why |
 |---|---|
-| Specialised workers | Only the general `worker` exists. Narrow ones (find references, web search, review…) come once the general one has been measured |
+| Specialised workers | Only `workers/general` exists. Narrow ones (find references, web search, review…) come once the general one has been measured; each is one more file in `agents/workers/` |
 | Skills | Slots exist at `.opencode/skills/`; content arrives in phase 2 |
 | Commands | Slot exists at `.opencode/commands/`; content arrives in phase 2 |
 | Tools | Nothing to register yet |
@@ -41,9 +42,10 @@ can take the plugin, a skill, an agent, or any combination.
 bazinga-opencode/
 ├── .opencode/
 │   ├── plugins/index.ts         # the single plugin-shaped export
-│   ├── agents/ceo.md            # tool-less coordinator; denies all but launching 01-manager
-│   ├── agents/01-manager.md     # one task -> worker jobs; launches worker only
-│   ├── agents/worker.md         # general leaf: read, search, edit; no shell, no launching
+│   ├── agents/ceo.md            # tool-less coordinator; denies all but launching general-manager
+│   ├── agents/general-manager.md  # one task -> worker jobs; launches workers/* only
+│   ├── agents/workers/            # the folder is part of the agent id: workers/<name>
+│   │   └── general.md             # general leaf: read, search, edit; no shell, no launching
 │   ├── skills/.gitkeep          # empty — phase 2 sources land here
 │   └── commands/.gitkeep        # empty — phase 2 sources land here
 ├── bin/bazinga.js               # installer CLI
@@ -110,28 +112,45 @@ anywhere.
         "settings": [{ "key": "experimental.subagent_depth", "min": 3, "reason": "…" }]
       },
       {
-        "id": "01-manager",
+        "id": "general-manager",
         "type": "agent",
-        "source": ".opencode/agents/01-manager.md",
-        "destination": "agents/01-manager.md",
+        "source": ".opencode/agents/general-manager.md",
+        "destination": "agents/general-manager.md",
         "settings": [{ "key": "experimental.subagent_depth", "min": 2, "reason": "…" }]
       },
       {
-        "id": "worker",
+        "id": "workers/general",
         "type": "agent",
-        "source": ".opencode/agents/worker.md",
-        "destination": "agents/worker.md"
+        "source": ".opencode/agents/workers/general.md",
+        "destination": "agents/workers/general.md"
       }
     ],
     "skills": [],
-    "commands": []
+    "commands": [],
+    "mcps": [
+      {
+        "id": "git",
+        "type": "mcp",
+        "description": "Git repository tools: status, diff, log, branches, commits",
+        "requires": ["uvx"],
+        "requiresHint": "install uv: https://docs.astral.sh/uv/",
+        "server": { "type": "local", "command": ["uvx", "mcp-server-git"] }
+      }
+      // fetch, context7 (remote) and serena follow the same shape
+    ]
   },
   "profiles": {
     "plugin": ["plugin:core"],
-    "full": ["plugin:core", "agent:ceo", "agent:01-manager", "agent:worker"]
+    "full": ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general"],
+    "mcp": ["mcp:git", "mcp:fetch", "mcp:context7", "mcp:serena"]
   }
 }
 ```
+
+An `mcp` has a `server` instead of a `source`/`destination`: it is written to
+`mcp.servers.<id>` in `opencode.json`, never over an existing entry, and removed on
+uninstall only while still unchanged. `requires` lists programs checked on PATH
+(a warning only). MCPs are not in `full`; `--all` and the `mcp` profile include them.
 
 `source` is relative to this repo. `destination` is relative to the chosen
 OpenCode folder. `register` names the config array the installed path is added
@@ -139,7 +158,7 @@ to — only the plugin needs one. `settings` lists scalar config values a compon
 needs (`agent:ceo` declares `experimental.subagent_depth`, minimum 3, with the
 reason). They are applied only on request: a yes in the TUI or `--settings`.
 A setting is either `{ "min": n }` (a number, raised to at least n) or
-`{ "value": true }` (a flag, set to that value; `agent:01-manager` declares
+`{ "value": true }` (a flag, set to that value; `agent:general-manager` declares
 `experimental.todo`). The installer never lowers a number, and records the
 previous value in the receipt so uninstall can put it back. When several
 selected components ask for the same key, it is written once, at the highest
@@ -205,10 +224,13 @@ The tests cover selection and profiles, destination resolution, copy, refusal
 without `--force`, `--no-config`, project-relative config entries, config merge
 and idempotency, receipt roundtrip, and uninstall. For the `ceo` agent they check
 a standalone install (no plugin, no config change), uninstall, and that its
-permissions stay exactly "deny everything, allow launching `01-manager`". For
+permissions stay exactly "deny everything, allow launching `general-manager`". For
 settings they check raise-only behaviour, refusal of an unusable value before any
 copy, distinct backups for two edits to one file, and uninstall restoring the
-previous value only when the user has not changed it since. Each
+previous value only when the user has not changed it since. They also check the
+"no opencode.json here" detection: a missing file, an existing one, an
+`opencode.jsonc` alone, the project root as the place checked, and when a
+selection needs the config at all. Each
 filesystem test creates a directory under `os.tmpdir()` and removes it afterwards.
 
 To inspect the directories, point `TMPDIR` at a visible folder and set
@@ -248,7 +270,10 @@ Observed on `opencode v2.1.0`, the agent team:
 | `experimental.subagent_depth: 2` allows top → manager → worker | a three-level chain returned `TOP-DONE MGR-DONE WRK-PONG` |
 | OpenCode records the subagent tree itself | each session had `parentID`, tokens and cost, no plugin involved |
 | A subagent call returns the child's final response and a `sessionID` | tools docs, the tool description, and the chain above |
-| CEO → `01-manager` → `worker` completes a real task | installed all three with the installer (`--project --settings`), asked the CEO for a one-line file; the file was created, the CEO called only `subagent`, the manager only `subagent`, the worker `glob`, `read`, `patch` |
+| A nested path becomes part of the agent id | `agents/workers/alpha.md` was launched as `workers/alpha`; the installer's `agents/workers/general.md` ran as `workers/general` |
+| A permission resource `workers/*` matches across the slash and nothing outside it | a test agent allowed `workers/*` launched `workers/alpha` and was refused `other` ("Permission denied: subagent") |
+| CEO → `general-manager` → `workers/general` completes a real task, after both renames | the manager reached the worker through `workers/*`; the file was created; three sessions' agents were `ceo`, `general-manager`, `workers/general` |
+| CEO → `general-manager` → `worker` completes a real task (before the folder move) | installed all three with the installer (`--project --settings`), asked the CEO for a one-line file; the file was created, the CEO called only `subagent`, the manager only `subagent`, the worker `glob`, `read`, `patch` |
 | The to-do tool is off by default | asked to list its tools, the default agent named `glob, grep, patch, question, read, shell, skill, subagent, webfetch, websearch, execute`; a test agent with `todowrite` allowed said it had no todo tool |
 | `experimental.todo: true` turns it on, as `todowrite` | with the flag, an agent allowed `todowrite` wrote its list and one denied it reported no tool. Source: the v2.1.0 changelog and PR #56947 (research supplied by the user). The schema served at `opencode.ai/config.json` does not list the key yet, so it lags the binary |
 | The manager uses `todowrite` when told to plan first, unconditionally | one team run with soft wording: zero calls. After making it a required first step: three calls, plus a separate review worker. One run on one model, not a guarantee |
@@ -293,7 +318,7 @@ node bin/bazinga.js uninstall --target /tmp/bazinga-install-test
 node --test tests/
 ```
 
-57 tests, no dependency beyond Node itself.
+82 tests, no dependency beyond Node itself.
 
 ### The load proof
 
@@ -313,9 +338,11 @@ Each line is `<ISO timestamp> pid=<server pid> loaded|unloaded`.
 4. Prove `setup` runs with a file marker. Done.
 5. Build the registry and installer. Done.
 6. Verify install, refusal without `--force`, and uninstall. Done.
-7. Add installer tests. Done, 57 passing.
+7. Add installer tests. Done, 82 passing.
 8. Add the `ceo` agent. Done: `.opencode/agents/ceo.md`, registered as `agent:ceo`.
-9. Add `01-manager` and `worker`, and run the whole chain end to end. Done.
+9. Add the manager (first `01-manager`, renamed `general-manager`) and the general
+   worker (first `worker`, moved into `workers/` as `workers/general`), and run the
+   whole chain end to end. Done.
 10. `git init`, commits and push to `github.com/parteekmalik/bazinga-opencode`.
     Done, on your instruction.
 

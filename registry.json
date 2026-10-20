@@ -26,11 +26,11 @@
         ]
       },
       {
-        "id": "01-manager",
+        "id": "general-manager",
         "type": "agent",
         "description": "Owns one task: splits it into worker jobs, keeps a to-do list, reports to the CEO",
-        "source": ".opencode/agents/01-manager.md",
-        "destination": "agents/01-manager.md",
+        "source": ".opencode/agents/general-manager.md",
+        "destination": "agents/general-manager.md",
         "settings": [
           {
             "key": "experimental.subagent_depth",
@@ -45,18 +45,54 @@
         ]
       },
       {
-        "id": "worker",
+        "id": "workers/general",
         "type": "agent",
         "description": "General worker: one narrow job, read/search/edit only, minimal report",
-        "source": ".opencode/agents/worker.md",
-        "destination": "agents/worker.md"
+        "source": ".opencode/agents/workers/general.md",
+        "destination": "agents/workers/general.md"
       }
     ],
     "skills": [],
-    "commands": []
+    "commands": [],
+    "mcps": [
+      {
+        "id": "git",
+        "type": "mcp",
+        "description": "Git repository tools: status, diff, log, branches, commits",
+        "requires": ["uvx"],
+        "requiresHint": "install uv: https://docs.astral.sh/uv/",
+        "server": { "type": "local", "command": ["uvx", "mcp-server-git"] }
+      },
+      {
+        "id": "fetch",
+        "type": "mcp",
+        "description": "Fetch a web page and return it as markdown or text",
+        "requires": ["uvx"],
+        "requiresHint": "install uv: https://docs.astral.sh/uv/",
+        "server": { "type": "local", "command": ["uvx", "mcp-server-fetch"] }
+      },
+      {
+        "id": "context7",
+        "type": "mcp",
+        "description": "Up-to-date library and framework documentation (remote, no install)",
+        "server": { "type": "remote", "url": "https://mcp.context7.com/mcp" }
+      },
+      {
+        "id": "serena",
+        "type": "mcp",
+        "description": "Semantic code search and editing through language servers",
+        "requires": ["serena"],
+        "requiresHint": "install it with: uv tool install -p 3.13 serena-agent",
+        "server": {
+          "type": "local",
+          "command": ["serena", "start-mcp-server", "--context", "agent", "--open-web-dashboard", "false"]
+        }
+      }
+    ]
   },
   "profiles": {
     "plugin": ["plugin:core"],
-    "full": ["plugin:core", "agent:ceo", "agent:01-manager", "agent:worker"]
+    "full": ["plugin:core", "agent:ceo", "agent:general-manager", "agent:workers/general"],
+    "mcp": ["mcp:git", "mcp:fetch", "mcp:context7", "mcp:serena"]
   }
 }

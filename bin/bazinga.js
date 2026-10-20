@@ -4,9 +4,13 @@ import { fileURLToPath } from "node:url"
 import {
   applyPlan,
   buildPlan,
+  configStatus,
+  describeServer,
   describeTarget,
+  missingRuntimes,
   pendingSettings,
   resolveDestination,
+  serverStates,
   uninstall as removeInstalled,
 } from "../install/apply.js"
 import { canPrompt, interactiveInstall, interactiveUninstall } from "../install/interactive.js"
@@ -38,12 +42,14 @@ Destination (exactly one)
 Selection (install only)
   --all               every component
   --profile <name>    a bundle declared in registry.json
-  --only <type:id>    one or more, comma-separated — for example plugin:core
+  --only <type:id>    one or more, comma-separated — for example plugin:core,mcp:git
+                      (types: plugin, agent, mcp; see "list". An mcp server is a config
+                      entry, not a file, and one already configured is left alone)
 
 Other
   --dry-run           print the plan, write nothing
   --force             replace an existing installation
-  --no-config         copy files but never touch opencode.json
+  --no-config         copy files but never touch opencode.json (this also skips MCP servers)
   --settings          also raise config values the components need (for example
                       experimental.subagent_depth). Never lowers a value; backed up
                       first. Without it, install only prints what is missing
@@ -119,7 +125,7 @@ function list() {
   const rows = components.map((component) => ({
     type: component.type,
     id: component.id,
-    source: component.source,
+    source: component.source ?? (component.server ? `(config: mcp.servers.${component.id})` : ""),
     registers: component.register ?? "",
   }))
 
@@ -155,22 +161,57 @@ function unmetSettings(plan) {
   }
 }
 
+// A command with every flag given cannot ask, so when the folder that holds
+// opencode.json has none and this install would write one, it says so.
+function missingConfigNote(destination, plan, flags, verb) {
+  const status = configStatus(destination)
+  const writes =
+    flags.config &&
+    (plan.some((item) => item.entry) ||
+      serverStates(plan).some((server) => !server.present) ||
+      (flags.settings && unmetSettings(plan).length > 0))
+  if (status.exists || !writes) return undefined
+
+  const lack = verb === "created" ? "had no config file" : "doesn't contain a config file"
+  return (
+    `note: this directory ${lack} (opencode.json): ${destination.configRoot}\n` +
+    `      ${verb} one here` +
+    (status.jsonc ? ". It has an opencode.jsonc, which the installer does not edit" : "") +
+    ". If this is the wrong directory, choose another destination"
+  )
+}
+
 function install(flags) {
   const registry = loadRegistry(repoRoot)
   const components = resolveSelection(registry, flags)
   const destination = destinationOf(flags)
   const plan = buildPlan(repoRoot, components, destination)
+  const configNote = (verb) => missingConfigNote(destination, plan, flags, verb)
 
   if (flags.dryRun) {
     console.log("Dry run — nothing written")
     console.log(`Destination: ${destination.destination} (${destination.mode})`)
+    const states = new Map(serverStates(plan).map((state) => [state.name, state]))
     for (const item of plan) {
       console.log(`\n  ${item.component.key}`)
+      if (item.server) {
+        const state = states.get(item.component.id)
+        console.log(`    server  ${describeServer(item.server)}`)
+        console.log(
+          state.present
+            ? `    config  ${item.configPath} already has mcp.servers.${state.name} — left as is`
+            : `    config  ${item.configPath} → mcp.servers.${state.name}`,
+        )
+        continue
+      }
       console.log(`    from    ${item.source}`)
       console.log(`    to      ${item.installed}`)
       if (item.entry) {
         console.log(`    config  ${item.configPath} → ${item.component.register}: ${item.entry}`)
       }
+    }
+    for (const missing of missingRuntimes(plan)) {
+      console.log(`\n  needs   ${missing.command} for ${missing.name}, not found on PATH${missing.hint ? ` — ${missing.hint}` : ""}`)
     }
     for (const setting of unmetSettings(plan)) {
       const state = flags.settings && flags.config ? "would set" : "needed, not applied without --settings"
@@ -178,10 +219,14 @@ function install(flags) {
         `\n  setting ${setting.configPath} → ${setting.key}: ${describeTarget(setting)} (now ${setting.current ?? "unset"}) — ${state}`,
       )
     }
+    const dryNote = configNote("would create")
+    if (dryNote) console.log(`\n${dryNote}`)
     return
   }
 
-  const { paths, configs, settings } = applyPlan(plan, {
+  const createdNote = configNote("created") // read before apply creates the file
+  const missing = missingRuntimes(plan) // before apply, while "already configured" still means what it did
+  const { paths, configs, settings, servers, skipped } = applyPlan(plan, {
     force: flags.force,
     config: flags.config,
     settings: flags.settings,
@@ -194,15 +239,24 @@ function install(flags) {
     paths,
     configs,
     settings,
+    servers,
   })
 
   console.log(`Installed ${components.length} component(s) into ${destination.destination}`)
   for (const path of paths) console.log(`  + ${path}`)
   for (const config of configs) console.log(`  ~ ${config.path} → ${config.key}: ${config.value}`)
+  for (const server of servers) {
+    console.log(`  + ${server.path} → mcp.servers.${server.name}: ${describeServer(server.value)}`)
+  }
+  for (const item of skipped) console.log(`  = mcp.servers.${item.name} not added (${item.reason})`)
+  for (const item of missing) {
+    console.log(`note: ${item.name} needs ${item.command}, which is not on PATH${item.hint ? ` — ${item.hint}` : ""}`)
+  }
   for (const setting of settings) {
     console.log(`  ~ ${setting.path} → ${setting.key}: ${setting.value} (was ${setting.previous ?? "unset"})`)
   }
   console.log(`  receipt ${join(destination.destination, ".bazinga-install.json")}`)
+  if (createdNote) console.log(createdNote)
 
   // Still unmet: say so, never change it silently.
   for (const setting of unmetSettings(plan)) {
@@ -227,6 +281,9 @@ function uninstall(flags) {
     for (const setting of receipt.settings ?? []) {
       const action = setting.previous === null ? "remove" : `back to ${setting.previous}`
       console.log(`  ~ ${setting.path} → ${setting.key}: ${action} (only if still ${setting.value})`)
+    }
+    for (const server of receipt.servers ?? []) {
+      console.log(`  ~ ${server.path} → remove mcp.servers.${server.name} (only if unchanged)`)
     }
     return
   }

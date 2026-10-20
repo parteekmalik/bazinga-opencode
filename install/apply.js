@@ -1,15 +1,20 @@
 import {
+  accessSync,
+  constants,
   copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
 import { homedir } from "node:os"
-import { dirname, isAbsolute, join, relative, sep } from "node:path"
+import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path"
+import { isDeepStrictEqual } from "node:util"
 
 // Where the chosen components land. `configRoot` is the directory holding the
 // opencode.json that the plugin entry must be registered in, which is not the
@@ -36,8 +41,43 @@ export function resolveDestination({ global = false, project = false, target, cw
   throw new Error("choose a destination: --global, --project, or --target <absolute path>")
 }
 
+// The opencode.json this destination would change, and whether it exists. An
+// opencode.jsonc may hold the real config; the installer cannot edit one safely
+// (comments), so it is reported, not used.
+export function configStatus(destination) {
+  const path = join(destination.configRoot, "opencode.json")
+  return {
+    path,
+    exists: existsSync(path),
+    jsonc: existsSync(join(destination.configRoot, "opencode.jsonc")),
+  }
+}
+
+// Would installing these components write to opencode.json? Only one that
+// registers itself, declares settings, or is an MCP server does, and --no-config
+// rules it out.
+export function needsConfig(components, { config = true } = {}) {
+  return (
+    config &&
+    components.some(
+      (component) => component.register || component.server || (component.settings ?? []).length > 0,
+    )
+  )
+}
+
 export function buildPlan(repoRoot, components, destination) {
   return components.map((component) => {
+    // An MCP server is only a config entry: nothing is copied, so it has no
+    // source or destination.
+    if (component.server) {
+      return {
+        component,
+        server: component.server,
+        configPath: join(destination.configRoot, "opencode.json"),
+        settings: [],
+      }
+    }
+
     const source = join(repoRoot, component.source)
     if (!existsSync(source)) {
       throw new Error(`registry entry ${component.key} points at a missing path: ${component.source}`)
@@ -103,9 +143,12 @@ function relativeEntry(configRoot, installed) {
 // `settings` is opt-in: a component that needs a config value never changes it
 // unless the caller asked, and `config: false` still means "never touch
 // opencode.json".
-export function applyPlan(plan, { force = false, config = true, settings = false } = {}) {
+export function applyPlan(plan, { force = false, config = true, settings = false, servers: writeServers } = {}) {
+  // Choosing an MCP server is its own consent, so unlike registering the plugin
+  // it does not depend on `config`; it follows `config` only when not stated.
+  const addServers = writeServers ?? config
   for (const item of plan) {
-    if (existsSync(item.installed) && !force) {
+    if (item.installed && existsSync(item.installed) && !force) {
       throw new Error(`${item.installed} already exists — use --force to overwrite`)
     }
   }
@@ -114,12 +157,17 @@ export function applyPlan(plan, { force = false, config = true, settings = false
   // not halfway through. Each key is applied once, at the highest minimum any
   // selected component asks for, so the receipt never holds a chain of edits.
   const toApply = config && settings ? pendingSettings(plan) : []
+  if (addServers) serverStates(plan) // a config whose mcp section is the wrong shape stops here too
 
   const paths = []
   const configs = []
   const applied = []
+  const servers = []
+  const skipped = []
 
   for (const item of plan) {
+    if (item.server) continue // config-only, handled below
+
     mkdirSync(dirname(item.installed), { recursive: true })
 
     if (statSync(item.source).isDirectory()) {
@@ -136,7 +184,21 @@ export function applyPlan(plan, { force = false, config = true, settings = false
         configs.push({ path: item.configPath, key: item.component.register, value: item.entry })
       }
     }
+  }
 
+  // MCP servers. One that is already configured is left exactly as it is.
+  for (const item of plan) {
+    if (!item.server) continue
+
+    const name = item.component.id
+    if (!addServers) {
+      skipped.push({ name, path: item.configPath, reason: "config changes are off" })
+      continue
+    }
+
+    const result = mergeServer(item.configPath, name, item.server)
+    if (result.changed) servers.push({ path: item.configPath, name, value: item.server })
+    else skipped.push({ name, path: item.configPath, reason: "already configured" })
   }
 
   for (const setting of toApply) {
@@ -151,7 +213,108 @@ export function applyPlan(plan, { force = false, config = true, settings = false
     }
   }
 
-  return { paths, configs, settings: applied }
+  return { paths, configs, settings: applied, servers, skipped }
+}
+
+// What the plan's MCP servers would do against the config as it is today:
+// add each one, or leave one that already exists. Also rejects a config whose
+// `mcp` section has the wrong shape, since adding to it would clobber the user's.
+export function serverStates(plan) {
+  return plan
+    .filter((item) => item.server)
+    .map((item) => ({
+      name: item.component.id,
+      configPath: item.configPath,
+      server: item.server,
+      ...serverState(item.configPath, item.component.id),
+    }))
+}
+
+function serverState(configPath, name) {
+  const mcp = readConfig(configPath)?.mcp
+  if (mcp !== undefined && !isObject(mcp)) {
+    throw new Error(`${configPath}: "mcp" is not an object — fix it yourself`)
+  }
+  const servers = mcp?.servers
+  if (servers !== undefined && !isObject(servers)) {
+    throw new Error(`${configPath}: "mcp.servers" is not an object — fix it yourself`)
+  }
+  return { present: Boolean(servers) && Object.hasOwn(servers, name), existing: servers?.[name] }
+}
+
+// Add `mcp.servers.<name>` unless the name is already there. Never replaces: an
+// existing server of that name is the user's, whatever it points at.
+export function mergeServer(configPath, name, server) {
+  if (serverState(configPath, name).present) return { changed: false }
+
+  const existed = existsSync(configPath)
+  const config = readConfig(configPath) ?? { $schema: CONFIG_SCHEMA }
+  config.mcp ??= {}
+  config.mcp.servers ??= {}
+  config.mcp.servers[name] = structuredClone(server)
+
+  const backup = existed ? backupFile(configPath) : undefined
+  writeConfig(configPath, config)
+  return { changed: true, backup }
+}
+
+// Remove the server only if it is still exactly what the installer wrote; one
+// the user edited since is theirs. Empties are pruned so nothing stray is left.
+export function removeServer(configPath, name, value) {
+  const config = readConfig(configPath)
+  const servers = config?.mcp?.servers
+  if (!isObject(servers) || !Object.hasOwn(servers, name) || !isDeepStrictEqual(servers[name], value)) {
+    return false
+  }
+
+  delete servers[name]
+  if (Object.keys(servers).length === 0) {
+    delete config.mcp.servers
+    if (Object.keys(config.mcp).length === 0) delete config.mcp
+  }
+
+  writeConfig(configPath, config)
+  return true
+}
+
+// Is `command` runnable from this PATH? An MCP server that needs a program that
+// is not installed fails silently when OpenCode starts it, so the installer says
+// so up front. (OpenCode's background service can have a different PATH than a
+// terminal, so this is a hint, not proof.)
+export function commandExists(command, env = process.env) {
+  const candidates = command.includes("/")
+    ? [command]
+    : (env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, command))
+
+  return candidates.some((candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  })
+}
+
+// One line for people: where a server points.
+export function describeServer(server) {
+  return server.type === "remote" ? server.url : (server.command ?? []).join(" ")
+}
+
+// The programs the selected components need that are not on PATH. A server that
+// is already configured will not be started by us, so its program is not asked for.
+export function missingRuntimes(plan) {
+  const missing = []
+  for (const item of plan) {
+    if (item.server && serverState(item.configPath, item.component.id).present) continue
+
+    for (const command of item.component.requires ?? []) {
+      if (!commandExists(command)) {
+        missing.push({ name: item.component.id, command, hint: item.component.requiresHint })
+      }
+    }
+  }
+  return missing
 }
 
 const CONFIG_SCHEMA = "https://opencode.ai/config.json"
@@ -296,12 +459,26 @@ export function removeConfigEntry(configPath, key, value) {
   return true
 }
 
+// A removed file can leave the folders the installer created for it (agents/,
+// agents/workers/) empty. Remove those, walking up, but never the destination
+// itself and never a folder that still holds something else.
+function pruneEmptyParents(path, stop) {
+  if (!stop) return
+
+  let dir = dirname(path)
+  while (dir.startsWith(`${stop}${sep}`) && existsSync(dir) && readdirSync(dir).length === 0) {
+    rmdirSync(dir)
+    dir = dirname(dir)
+  }
+}
+
 // Undo exactly what a receipt records: the installed paths, then the config
 // entries that were added for them. Anything else in the destination is left
 // untouched.
 export function uninstall(receipt) {
   for (const path of receipt.paths ?? []) {
     rmSync(path, { recursive: true, force: true })
+    pruneEmptyParents(path, receipt.destination)
   }
 
   for (const config of receipt.configs ?? []) {
@@ -310,5 +487,9 @@ export function uninstall(receipt) {
 
   for (const setting of receipt.settings ?? []) {
     restoreSetting(setting.path, setting.key, setting.value, setting.previous)
+  }
+
+  for (const server of receipt.servers ?? []) {
+    removeServer(server.path, server.name, server.value)
   }
 }

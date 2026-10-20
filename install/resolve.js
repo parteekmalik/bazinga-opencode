@@ -1,16 +1,18 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-// The four things this repo can place into an OpenCode folder. The registry key
-// is plural, the selection key is singular: `plugins` in registry.json is picked
-// with `plugin:core`.
-export const TYPES = ["plugin", "agent", "skill", "command"]
+// The things this repo can place into an OpenCode folder. The registry key is
+// plural, the selection key is singular: `plugins` in registry.json is picked
+// with `plugin:core`. An `mcp` is not a file: it is a server entry added to
+// opencode.json.
+export const TYPES = ["plugin", "agent", "skill", "command", "mcp"]
 
 const REGISTRY_KEYS = {
   plugin: "plugins",
   agent: "agents",
   skill: "skills",
   command: "commands",
+  mcp: "mcps",
 }
 
 export function loadRegistry(repoRoot) {
