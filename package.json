@@ -1,0 +1,49 @@
+{
+  "name": "bazinga-opencode",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A frame, not a ruleset: two roles, one contract. OpenCode 2 plugin.",
+  "license": "MIT",
+  "main": "./.opencode/plugins/index.ts",
+  "exports": {
+    ".": "./.opencode/plugins/index.ts",
+    "./plugin": "./.opencode/plugins/index.ts"
+  },
+  "bin": {
+    "bazinga": "./bin/bazinga.js"
+  },
+  "files": [
+    ".opencode/",
+    "bin/",
+    "install/",
+    "registry.json",
+    "README.md",
+    "INSTALL.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin"
+  ],
+  "peerDependencies": {
+    "@opencode/plugin": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.0.32",
+    "@types/node": "^26",
+    "typescript": "^5.9.0"
+  },
+  "scripts": {
+    "test": "node --test tests/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1"
+  }
+}

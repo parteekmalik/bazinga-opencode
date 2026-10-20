@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "components": {
+    "plugins": [
+      {
+        "id": "core",
+        "type": "plugin",
+        "source": ".opencode/plugins",
+        "destination": "plugins/bazinga",
+        "register": "plugins"
+      }
+    ],
+    "agents": [],
+    "skills": [],
+    "commands": []
+  },
+  "profiles": {
+    "plugin": ["plugin:core"],
+    "full": ["plugin:core"]
+  }
+}

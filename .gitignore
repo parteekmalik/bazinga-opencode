@@ -1,0 +1,10 @@
+node_modules/
+.DS_Store
+*.log
+
+# Written by the plugin when options.target is "cwd"
+plugin-loaded.log
+
+# Installer output, if this repo is itself installed into
+.bazinga-install.json
+opencode.json.bak-bazinga-*
